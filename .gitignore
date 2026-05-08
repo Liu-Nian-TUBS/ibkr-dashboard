@@ -1,0 +1,63 @@
+
+# Local agent/runtime state
+.worktrees/
+.omx/
+.codex/
+
+# IDE/editor metadata
+.idea/
+.vscode/
+*.iml
+
+# OS files
+.DS_Store
+**/.DS_Store
+
+# Local screenshots or temporary visual notes
+/img.png
+/screenshots/
+
+# Python caches and local environments
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+backend/.venv/
+*.egg-info/
+
+# Frontend dependencies and build output
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# Local secrets and credentials
+.env
+.env.*
+!.env.example
+!backend/.env.example
+
+# User portfolio data and local databases
+*.xml
+*.csv
+*.xlsx
+*.xls
+*.db
+*.sqlite
+ibkr-dashboard-imports/
+
+# Logs and reports
+*.log
+coverage/
+htmlcov/
+backend/htmlcov/
+.coverage
+backend/.coverage
+
+# Internal planning/review documents, not needed for normal startup or use
+docs/
+PRD.md
+
+# Development-only test suite, kept local but not needed by end users
+backend/tests/
