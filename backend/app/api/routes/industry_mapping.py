@@ -40,7 +40,7 @@ def get_industry_summary() -> dict:
 def get_mapping(symbol: str) -> dict:
     if _service is None:
         raise HTTPException(status_code=503, detail="service unavailable")
-    industry = _service.get(symbol)
+    industry = _service.get_override(symbol)
     if industry is None:
         raise HTTPException(status_code=404, detail="mapping not found")
     return {

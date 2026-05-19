@@ -13,6 +13,15 @@ class TradeRecord:
     currency: str = ""
     fifo_pnl_realized: float = 0.0
     ib_commission: float = 0.0
+    expiry: str = ""
+    strike: str = ""
+    put_call: str = ""
+    multiplier: str = ""
+    underlying: str = ""
+    delta: str = ""
+    gamma: str = ""
+    theta: str = ""
+    vega: str = ""
 
 
 @dataclass(slots=True)
@@ -59,6 +68,15 @@ class PositionSnapshotRecord:
     cost_basis_money: str
     average_cost_price: str
     unrealized_pnl_snapshot: str
+    expiry: str = ""
+    strike: str = ""
+    put_call: str = ""
+    multiplier: str = ""
+    underlying: str = ""
+    delta: str = ""
+    gamma: str = ""
+    theta: str = ""
+    vega: str = ""
 
 
 @dataclass(slots=True)

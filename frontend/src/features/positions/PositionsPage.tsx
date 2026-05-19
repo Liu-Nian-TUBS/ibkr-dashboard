@@ -848,7 +848,9 @@ function CandlestickChart({
           <div><span>开盘价</span><b>{formatCurrency(hoveredOpen, currency)}</b></div>
           <div><span>收盘价</span><b>{formatCurrency(hoveredClose, currency)}</b></div>
           <div><span>涨跌幅</span><b className={`delta-text ${deltaClass(hoveredReturn ?? 0)}`}>{hoveredReturn === null ? "-" : formatPercent(hoveredReturn)}</b></div>
+          <div><span>成交量</span><b>{formatNumber(asNumber(hoveredRow.volume, 0), 0)}</b></div>
           <div><span>市盈率</span><b>{formatPeRatio(hoveredRow)}</b></div>
+          <div><span>PE行业位置</span><b>{formatPeIndustryPosition(hoveredRow)}</b></div>
           {hoveredMarkers.map((marker) => {
             const label = marker.side === "BUY" ? "买入" : "卖出";
             return (
@@ -880,7 +882,20 @@ function formatPeRatio(row: ApiRecord) {
       ?? row.price_earnings,
     Number.NaN,
   );
-  return Number.isFinite(value) ? `${formatNumber(value, 2)}x` : "-";
+  if (!Number.isFinite(value)) return "缺失";
+  if (value <= 0) return "亏损";
+  return `${formatNumber(value, 2)}x`;
+}
+
+function formatPeIndustryPosition(row: ApiRecord) {
+  const rank = asNumber(row.pe_rank ?? row.pe_ttm_rank, Number.NaN);
+  const total = asNumber(row.pe_total ?? row.pe_ttm_total, Number.NaN);
+  const percentile = asNumber(row.pe_percentile ?? row.pe_ttm_percentile, Number.NaN);
+  if (Number.isFinite(rank) && Number.isFinite(total) && total > 0) {
+    const suffix = Number.isFinite(percentile) ? ` · ${formatNumber(percentile, 1)}%` : "";
+    return `${formatNumber(rank, 0)}/${formatNumber(total, 0)}${suffix}`;
+  }
+  return "-";
 }
 
 function TradeMarkerTimeline({

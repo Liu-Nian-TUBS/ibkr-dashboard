@@ -11,6 +11,28 @@ from app.models.xml_models import (
 )
 
 
+def _first_attr(node: ET.Element, *names: str, default: str = "") -> str:
+    for name in names:
+        value = node.attrib.get(name)
+        if value not in (None, ""):
+            return value
+    return default
+
+
+def _option_fields(node: ET.Element) -> dict[str, str]:
+    return {
+        "expiry": _first_attr(node, "expiry", "expiration", "expirationDate", "lastTradeDateOrContractMonth"),
+        "strike": _first_attr(node, "strike", "strikePrice"),
+        "put_call": _first_attr(node, "putCall", "put/call", "right", "callPut"),
+        "multiplier": _first_attr(node, "multiplier"),
+        "underlying": _first_attr(node, "underlyingSymbol", "underlying", "underlyingConid"),
+        "delta": _first_attr(node, "delta"),
+        "gamma": _first_attr(node, "gamma"),
+        "theta": _first_attr(node, "theta"),
+        "vega": _first_attr(node, "vega"),
+    }
+
+
 def parse_xml_file(path: str) -> ParsedXmlData:
     tree = ET.parse(path)
     root = tree.getroot()
@@ -82,6 +104,7 @@ def parse_xml_content(root: ET.Element) -> ParsedXmlData:
                 cost_basis_money=node.attrib.get("costBasisMoney", "0"),
                 average_cost_price=node.attrib.get("costBasisPrice") or node.attrib.get("openPrice", "0"),
                 unrealized_pnl_snapshot=node.attrib.get("fifoPnlUnrealized", "0"),
+                **_option_fields(node),
             )
         )
 
@@ -140,6 +163,7 @@ def parse_xml_content(root: ET.Element) -> ParsedXmlData:
                 currency=node.attrib.get("currency", ""),
                 fifo_pnl_realized=float(node.attrib.get("fifoPnlRealized", "0") or 0),
                 ib_commission=float(node.attrib.get("ibCommission", "0") or 0),
+                **_option_fields(node),
             )
         )
 

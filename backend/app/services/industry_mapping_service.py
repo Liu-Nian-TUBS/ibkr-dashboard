@@ -3,6 +3,29 @@ from typing import Any
 from app.repositories.industry_mapping_repository import IndustryMappingRepository
 
 
+DEFAULT_INDUSTRY_MAPPINGS: dict[str, str] = {
+    "AAPL": "信息技术 / 消费电子",
+    "AMAT": "信息技术 / 半导体设备",
+    "AMD": "信息技术 / 半导体",
+    "ASML": "信息技术 / 半导体设备",
+    "AVGO": "信息技术 / 半导体",
+    "BA": "工业 / 航空航天与国防",
+    "GOOG": "通信服务 / 互联网平台",
+    "GOOGL": "通信服务 / 互联网平台",
+    "INTC": "信息技术 / 半导体",
+    "LRCX": "信息技术 / 半导体设备",
+    "META": "通信服务 / 互联网平台",
+    "MSFT": "信息技术 / 软件与云计算",
+    "MU": "信息技术 / 存储半导体",
+    "NVDA": "信息技术 / AI芯片",
+    "QCOM": "信息技术 / 通信半导体",
+    "RKLB": "工业 / 航空航天与国防",
+    "SMCI": "信息技术 / AI服务器",
+    "TSLA": "可选消费 / 电动车",
+    "TSM": "信息技术 / 半导体代工",
+}
+
+
 class IndustryMappingService:
     def __init__(self, repository: IndustryMappingRepository | None = None) -> None:
         self._repository = repository
@@ -18,6 +41,10 @@ class IndustryMappingService:
         return {"symbol": normalized_symbol, "industry": industry}
 
     def get(self, symbol: str) -> str | None:
+        normalized = symbol.upper()
+        return self._mappings.get(normalized) or DEFAULT_INDUSTRY_MAPPINGS.get(normalized)
+
+    def get_override(self, symbol: str) -> str | None:
         return self._mappings.get(symbol.upper())
 
     def delete(self, symbol: str) -> bool:

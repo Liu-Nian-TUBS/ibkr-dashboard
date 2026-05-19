@@ -1,0 +1,8 @@
+{
+  "name": "ibkr-dashboard-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev:all": "bash ./scripts/dev-all.sh"
+  }
+}

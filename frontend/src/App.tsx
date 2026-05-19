@@ -1,4 +1,4 @@
-import { Component, useMemo, useState } from "react";
+import { Component, Suspense, lazy, useMemo, useState } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import type { NavItem, PageKey } from "./lib/contracts";
 import { OverviewPage } from "./features/overview/OverviewPage";
@@ -6,15 +6,20 @@ import { PositionsPage } from "./features/positions/PositionsPage";
 import { PerformancePage } from "./features/performance/PerformancePage";
 import { TradesPage } from "./features/trades/TradesPage";
 import { SettingsPage } from "./features/settings/SettingsPage";
-import { StockAnalysisPage } from "./features/stock-analysis/StockAnalysisPage";
+
+const PortfolioAnalysisPage = lazy(() =>
+  import("./features/portfolio-analysis/PortfolioAnalysisPage").then((module) => ({
+    default: module.PortfolioAnalysisPage,
+  }))
+);
 
 const NAV_ITEMS: NavItem[] = [
   { key: "overview", label: "资产总览", detail: "净值 / 收益 / 同步" },
   { key: "positions", label: "持仓明细", detail: "仓位 / 行业 / 个股" },
   { key: "performance", label: "业绩分析", detail: "榜单 / 日历 / 月度" },
   { key: "trades", label: "交易明细", detail: "交易 / 出入金" },
+  { key: "portfolioAnalysis", label: "持仓分析", detail: "市场 / 持仓 / 个股" },
   { key: "settings", label: "设置与导入", detail: "XML / 同步 / 数据源" },
-  { key: "stockAnalysis", label: "个股分析", detail: "阶段化占位" },
 ];
 
 const PAGE_RENDERERS: Record<PageKey, () => JSX.Element> = {
@@ -22,8 +27,12 @@ const PAGE_RENDERERS: Record<PageKey, () => JSX.Element> = {
   positions: () => <PositionsPage />,
   performance: () => <PerformancePage />,
   trades: () => <TradesPage />,
+  portfolioAnalysis: () => (
+    <Suspense fallback={<div className="loading-block"><span /><strong>正在加载持仓分析</strong></div>}>
+      <PortfolioAnalysisPage />
+    </Suspense>
+  ),
   settings: () => <SettingsPage />,
-  stockAnalysis: () => <StockAnalysisPage />,
 };
 
 function App() {

@@ -29,6 +29,11 @@ from app.api.routes.performance import router as performance_router
 from app.api.routes.performance import set_derived_repository as set_performance_derived_repository
 from app.api.routes.performance import set_raw_repository as set_performance_raw_repository
 from app.api.routes.performance import set_settings_service as set_performance_settings_service
+from app.api.routes.portfolio_analysis import router as portfolio_analysis_router
+from app.api.routes.portfolio_analysis import set_industry_mapping_service as set_portfolio_analysis_industry_mapping_service
+from app.api.routes.portfolio_analysis import set_quote_service as set_portfolio_analysis_quote_service
+from app.api.routes.portfolio_analysis import set_raw_repository as set_portfolio_analysis_raw_repository
+from app.api.routes.portfolio_analysis import set_settings_service as set_portfolio_analysis_settings_service
 from app.api.routes.industry_mapping import router as industry_mapping_router
 from app.api.routes.industry_mapping import set_mapping_service
 from app.api.routes.positions import router as positions_router
@@ -49,6 +54,11 @@ from app.api.routes.settings import set_pull_frequency_update_handler
 from app.api.routes.settings import set_quote_service as set_settings_quote_service
 from app.api.routes.settings import set_raw_repository as set_settings_raw_repository
 from app.api.routes.settings import set_settings_service
+from app.api.routes.settings import set_telegram_report_update_handler
+from app.api.routes.telegram import router as telegram_router
+from app.api.routes.telegram import set_quote_service as set_telegram_quote_service
+from app.api.routes.telegram import set_raw_repository as set_telegram_raw_repository
+from app.api.routes.telegram import set_settings_service as set_telegram_settings_service
 from app.api.routes.trades import router as trades_router
 from app.api.routes.trades import set_raw_repository as set_trades_raw_repository
 from app.api.routes.trades import set_settings_service as set_trades_settings_service
@@ -61,7 +71,7 @@ from app.core.trace import generate_trace_id
 from app.jobs.manual_backfill_job import validate_backfill_range
 from app.jobs.daily_sync_job import build_auto_backfill_plan
 from app.jobs.daily_sync_job import run_daily_sync_with_retry
-from app.jobs.sync_scheduler import DailySyncScheduler
+from app.jobs.sync_scheduler import DailySyncScheduler, DailyTimeScheduler
 from app.repositories.derived_repository import DerivedRepository
 from app.repositories.es_client import ElasticsearchLike
 from app.repositories.http_es_client import HttpElasticsearchClient
@@ -73,10 +83,13 @@ from app.services.auto_reconciliation_service import AutoReconciliationService
 from app.services.industry_mapping_service import IndustryMappingService
 from app.services.daily_performance_service import DailyPerformanceService
 from app.services.flex_client import FlexStatementClient
-from app.services.quote_service import QuoteService, fetch_benchmark_history, fetch_finnhub_quote, fetch_yahoo_quote
+from app.services.quote_service import QuoteService, fetch_benchmark_history, fetch_finnhub_quote, fetch_longbridge_quote, fetch_yahoo_quote
 from app.services.ingestion_service import IngestionService
+from app.services.market_data_provider import QuoteFallbackMarketDataProvider
 from app.services.manual_backfill_service import ManualBackfillService
+from app.services.portfolio_analysis_service import PortfolioAnalysisService
 from app.services.settings_service import SettingsService
+from app.services.telegram_service import TelegramCommandService, TelegramDeliveryService
 from app.services.xml_parser import parse_xml_string
 
 
@@ -155,6 +168,8 @@ set_ingestion_service(IngestionService(raw_repository=raw_repository))
 set_raw_repository(raw_repository)
 set_settings_raw_repository(raw_repository)
 set_positions_raw_repository(raw_repository)
+set_portfolio_analysis_raw_repository(raw_repository)
+set_telegram_raw_repository(raw_repository)
 set_trades_raw_repository(raw_repository)
 set_cash_flows_raw_repository(raw_repository)
 set_performance_derived_repository(derived_repository)
@@ -167,6 +182,8 @@ set_trades_settings_service(settings_service)
 set_cash_flows_settings_service(settings_service)
 set_performance_settings_service(settings_service)
 set_overview_settings_service(settings_service)
+set_portfolio_analysis_settings_service(settings_service)
+set_telegram_settings_service(settings_service)
 set_overview_derived_repository(derived_repository)
 daily_performance_service = DailyPerformanceService(
     raw_repository=raw_repository,
@@ -181,11 +198,11 @@ set_auto_reconciliation_service(auto_reconciliation_service)
 
 def _build_quote_service() -> QuoteService:
     def primary(symbol: str) -> float | None:
-        api_key = settings_service.get().finnhub_api_key
-        return fetch_finnhub_quote(symbol, api_key=api_key)
+        return fetch_longbridge_quote(symbol)
 
     def secondary(symbol: str) -> float | None:
-        return fetch_yahoo_quote(symbol)
+        api_key = settings_service.get().finnhub_api_key
+        return fetch_finnhub_quote(symbol, api_key=api_key) or fetch_yahoo_quote(symbol)
 
     def snapshot(symbol: str) -> float:
         positions = raw_repository.list_positions(symbol=symbol, page=1, page_size=1)
@@ -205,6 +222,8 @@ set_quote_service(_quote_service_instance)
 set_settings_quote_service(_quote_service_instance)
 set_positions_quote_service(_quote_service_instance)
 set_overview_quote_service(_quote_service_instance)
+set_portfolio_analysis_quote_service(_quote_service_instance)
+set_telegram_quote_service(_quote_service_instance)
 set_overview_benchmark_history_fetcher(
     lambda symbol, start_date, end_date: fetch_benchmark_history(
         symbol,
@@ -271,6 +290,53 @@ def execute_scheduled_daily_sync() -> None:
         )
 
 
+def _build_telegram_command_service() -> TelegramCommandService:
+    analysis_service = PortfolioAnalysisService(
+        raw_repository=raw_repository,
+        settings_service=settings_service,
+        market_data_provider=QuoteFallbackMarketDataProvider(_quote_service_instance),
+        industry_mapping_service=_industry_mapping_service_instance,
+    )
+    return TelegramCommandService(
+        settings_service=settings_service,
+        analysis_service=analysis_service,
+        raw_repository=raw_repository,
+    )
+
+
+def run_configured_telegram_report() -> dict[str, object]:
+    settings = settings_service.get()
+    service = _build_telegram_command_service()
+    delivery = TelegramDeliveryService(bot_token=settings.telegram_bot_token)
+    return service.deliver_daily_report(delivery)
+
+
+def execute_scheduled_telegram_report() -> None:
+    try:
+        result = run_configured_telegram_report()
+        logger.info(
+            json.dumps({"event": "telegram_daily_report_done", "result": result}),
+            extra={"trace_id": "scheduler"},
+        )
+    except Exception as exc:  # pragma: no cover - defensive runtime logging
+        logger.error(
+            json.dumps({"event": "telegram_daily_report_failed", "error": str(exc)}),
+            extra={"trace_id": "scheduler"},
+        )
+
+
+def update_configured_telegram_report_schedule() -> None:
+    settings = settings_service.get()
+    if (
+        not settings.telegram_reports_enabled
+        or not settings.telegram_bot_token
+        or not settings.telegram_allowlisted_chat_ids
+    ):
+        telegram_report_scheduler.clear()
+        return
+    telegram_report_scheduler.schedule(time_of_day=settings.telegram_daily_report_time)
+
+
 def run_startup_auto_backfill(
     *,
     today: date | None = None,
@@ -298,11 +364,16 @@ def run_startup_auto_backfill(
 
 
 daily_sync_scheduler = DailySyncScheduler(run_job=execute_scheduled_daily_sync)
+telegram_report_scheduler = DailyTimeScheduler(
+    run_job=execute_scheduled_telegram_report,
+    job_id="telegram_daily_report",
+)
 manual_backfill_service = ManualBackfillService()
 set_daily_sync_runner(run_daily_sync_with_credentials)
 set_pull_frequency_update_handler(
     lambda minutes: daily_sync_scheduler.update_interval(interval_minutes=minutes)
 )
+set_telegram_report_update_handler(update_configured_telegram_report_schedule)
 
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
@@ -364,6 +435,17 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
             extra={"trace_id": "startup"},
         )
     try:
+        update_configured_telegram_report_schedule()
+        logger.info(
+            json.dumps({"event": "telegram_report_scheduler_checked"}),
+            extra={"trace_id": "startup"},
+        )
+    except Exception as exc:  # pragma: no cover - defensive runtime logging
+        logger.error(
+            json.dumps({"event": "telegram_report_scheduler_failed", "error": str(exc)}),
+            extra={"trace_id": "startup"},
+        )
+    try:
         backfilled_days = run_startup_auto_backfill()
         if backfilled_days:
             logger.info(
@@ -378,6 +460,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
             extra={"trace_id": "startup"},
         )
     yield
+    telegram_report_scheduler.shutdown()
     daily_sync_scheduler.shutdown()
 
 
@@ -429,10 +512,12 @@ async def enforce_storage_ready(request, call_next):
 app.include_router(import_tasks_router)
 app.include_router(overview_router)
 app.include_router(positions_router)
+app.include_router(portfolio_analysis_router)
 app.include_router(performance_router)
 app.include_router(trades_router)
 app.include_router(cash_flows_router)
 app.include_router(settings_router)
+app.include_router(telegram_router)
 app.include_router(reconciliation_router)
 app.include_router(quotes_router)
 app.include_router(industry_mapping_router)
@@ -440,6 +525,7 @@ _industry_mapping_service_instance = IndustryMappingService(repository=industry_
 set_mapping_service(_industry_mapping_service_instance)
 set_positions_industry_mapping_service(_industry_mapping_service_instance)
 set_overview_industry_mapping_service(_industry_mapping_service_instance)
+set_portfolio_analysis_industry_mapping_service(_industry_mapping_service_instance)
 
 
 class ManualBackfillRequest(BaseModel):

@@ -2,9 +2,12 @@ from dataclasses import dataclass
 from datetime import date
 from datetime import timedelta
 from datetime import timezone, datetime
+import importlib
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 from threading import RLock
 from time import monotonic
 from typing import Callable
@@ -352,6 +355,14 @@ def fetch_yahoo_quote(symbol: str, *, client: httpx.Client | None = None) -> flo
             client.close()
 
 
+def fetch_longbridge_quote(symbol: str) -> float | None:
+    rows = _run_longbridge_json(["quote", _normalize_longbridge_symbol(symbol), "--format", "json"], timeout=12.0)
+    row = _first_longbridge_record(rows)
+    if row is None:
+        return None
+    return _first_number(row, ("last", "last_done", "last_price", "price", "close", "prev_close"))
+
+
 def _parse_iso_date(value: str) -> date | None:
     if isinstance(value, str) and len(value) >= 8 and value[:8].isdigit():
         raw = value[:8]
@@ -595,6 +606,189 @@ def fetch_yahoo_candles(
             client.close()
 
 
+def fetch_longbridge_candles(
+    symbol: str,
+    *,
+    start_date: str,
+    end_date: str,
+) -> list[dict]:
+    start = _parse_iso_date(start_date)
+    end = _parse_iso_date(end_date)
+    if start is None or end is None or start > end:
+        return []
+    lookback_days = max((end - start).days + 1, 1)
+    rows = _run_longbridge_json(
+        [
+            "kline",
+            _normalize_longbridge_symbol(symbol),
+            "--period",
+            "day",
+            "--count",
+            str(min(max(lookback_days * 2, lookback_days + 30), 1200)),
+            "--format",
+            "json",
+        ],
+        timeout=30.0,
+    )
+    points: list[dict] = []
+    for row in _longbridge_records(rows):
+        if not isinstance(row, dict):
+            continue
+        point_date = _parse_iso_date(str(row.get("time") or row.get("date") or ""))
+        if point_date is None or point_date < start or point_date > end:
+            continue
+        close = _first_number(row, ("close", "last", "prev_close"))
+        if close is None or close <= 0:
+            continue
+        day = point_date.isoformat()
+        points.append(
+            {
+                "date": day,
+                "date_iso": day,
+                "open": round(_coerce_float(row.get("open"), close), 4),
+                "high": round(_coerce_float(row.get("high"), close), 4),
+                "low": round(_coerce_float(row.get("low"), close), 4),
+                "close": round(close, 4),
+                "volume": int(_coerce_float(row.get("volume"), 0.0)),
+                "source": "longbridge",
+            }
+        )
+    points.sort(key=lambda point: str(point.get("date", "")))
+    return points
+
+
+def fetch_longbridge_valuation_rank(
+    symbol: str,
+    *,
+    start_date: str,
+    end_date: str,
+) -> dict[str, dict]:
+    start = _parse_iso_date(start_date)
+    end = _parse_iso_date(end_date)
+    if start is None or end is None or start > end:
+        return {}
+    payload = _run_longbridge_json(
+        [
+            "valuation-rank",
+            _normalize_longbridge_symbol(symbol),
+            "--start",
+            start.strftime("%Y%m%d"),
+            "--end",
+            end.strftime("%Y%m%d"),
+            "--format",
+            "json",
+        ],
+        timeout=30.0,
+    )
+    if not isinstance(payload, dict):
+        return {}
+    by_date: dict[str, dict] = {}
+    for metric in ("pe", "pe_ttm", "pb", "ps", "dvd"):
+        rows = payload.get(metric)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            point_date = _longbridge_rank_date(row.get("timestamp"))
+            if point_date is None or point_date < start or point_date > end:
+                continue
+            rank = _coerce_positive_int(row.get("rank"))
+            total = _coerce_positive_int(row.get("total"))
+            if rank is None or total is None:
+                continue
+            day = point_date.isoformat()
+            entry = by_date.setdefault(day, {"date": day, "valuation_source": "longbridge_valuation_rank"})
+            entry[f"{metric}_rank"] = rank
+            entry[f"{metric}_total"] = total
+            entry[f"{metric}_percentile"] = round(rank / total * 100, 2)
+    return by_date
+
+
+def fetch_longbridge_history(
+    symbol: str,
+    *,
+    start_date: str,
+    end_date: str,
+) -> list[dict]:
+    return [
+        {
+            "date": str(point.get("date", "")),
+            "value": point.get("close"),
+            "source": "longbridge",
+        }
+        for point in fetch_longbridge_candles(symbol, start_date=start_date, end_date=end_date)
+        if point.get("date") and point.get("close") is not None
+    ]
+
+
+def fetch_futu_candles(
+    symbol: str,
+    *,
+    start_date: str,
+    end_date: str,
+    host: str = "127.0.0.1",
+    port: int = 11111,
+) -> list[dict]:
+    start = _parse_iso_date(start_date)
+    end = _parse_iso_date(end_date)
+    if start is None or end is None or start > end:
+        return []
+    futu = _load_futu_module()
+    if futu is None:
+        return []
+    try:
+        quote_ctx = futu.OpenQuoteContext(host=host, port=port)
+        try:
+            ret, data, _page_req_key = quote_ctx.request_history_kline(
+                _normalize_futu_symbol(symbol),
+                start=start.isoformat(),
+                end=end.isoformat(),
+                ktype=futu.KLType.K_DAY,
+                autype=futu.AuType.QFQ,
+                fields=futu.KL_FIELD.ALL_REAL,
+                max_count=1000,
+            )
+        finally:
+            quote_ctx.close()
+    except Exception:
+        return []
+    if ret != futu.RET_OK:
+        return []
+    points: list[dict] = []
+    for row in _records(data):
+        point_date = _parse_iso_date(str(row.get("time_key") or row.get("date") or row.get("time") or ""))
+        if point_date is None or point_date < start or point_date > end:
+            continue
+        close = _first_number(row, ("close", "last", "last_price"))
+        if close is None or close <= 0:
+            continue
+        day = point_date.isoformat()
+        point = {
+            "date": day,
+            "date_iso": day,
+            "open": round(_coerce_float(row.get("open"), close), 4),
+            "high": round(_coerce_float(row.get("high"), close), 4),
+            "low": round(_coerce_float(row.get("low"), close), 4),
+            "close": round(close, 4),
+            "volume": int(_coerce_float(row.get("volume"), 0.0)),
+            "source": "futu_opend",
+        }
+        for source_key, target_key in (
+            ("pe_ratio", "pe_ratio"),
+            ("turnover_rate", "turnover_rate"),
+            ("turnover", "turnover"),
+            ("change_rate", "change_rate"),
+            ("last_close", "last_close"),
+        ):
+            value = _first_number(row, (source_key,))
+            if value is not None:
+                point[target_key] = round(value, 6)
+        points.append(point)
+    points.sort(key=lambda point: str(point.get("date", "")))
+    return points
+
+
 def fetch_nasdaq_candles(
     symbol: str,
     *,
@@ -806,6 +1000,40 @@ def fetch_benchmark_history(
     return points
 
 
+def refresh_longbridge_history_cache(
+    symbols: list[str],
+    *,
+    start_date: str,
+    end_date: str,
+    history_cache: MarketHistoryCache | None = None,
+) -> dict[str, object]:
+    cache = history_cache or _default_market_history_cache()
+    results: list[dict[str, object]] = []
+    for symbol in _dedupe_symbols(symbols):
+        points = fetch_longbridge_history(symbol, start_date=start_date, end_date=end_date)
+        if points:
+            cache.store_range(symbol, start_date, end_date, points)
+        results.append(
+            {
+                "symbol": symbol,
+                "points": len(points),
+                "source": "longbridge" if points else "unavailable",
+            }
+        )
+    _clear_market_history_memory_cache()
+    return {
+        "status": "ok",
+        "start_date": start_date,
+        "end_date": end_date,
+        "symbols": [result["symbol"] for result in results],
+        "total_symbols": len(results),
+        "refreshed_symbols": sum(1 for result in results if int(result["points"]) > 0),
+        "points": sum(int(result["points"]) for result in results),
+        "results": results,
+        "cache_path": str(cache.path),
+    }
+
+
 def _fetch_benchmark_history_uncached(
     symbol: str,
     *,
@@ -817,6 +1045,15 @@ def _fetch_benchmark_history_uncached(
     start = _parse_iso_date(start_date)
     end = _parse_iso_date(end_date)
     minimum_points = 1 if start is not None and end is not None and start == end else 2
+    points: list[dict] = []
+    if client is None:
+        points = fetch_longbridge_history(
+            symbol,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    if len(points) >= minimum_points:
+        return points
     points = fetch_finnhub_history(
         symbol,
         api_key=finnhub_api_key,
@@ -839,3 +1076,159 @@ def _fetch_benchmark_history_uncached(
             client=client,
         )
     return points
+
+
+def _normalize_longbridge_symbol(symbol: str) -> str:
+    cleaned = str(symbol or "").strip().upper()
+    if not cleaned:
+        return "AAPL.US"
+    index_aliases = {
+        "^GSPC": ".SPX.US",
+        "GSPC": ".SPX.US",
+        "SP500": ".SPX.US",
+        "^IXIC": ".IXIC.US",
+        "IXIC": ".IXIC.US",
+        "COMP": ".IXIC.US",
+        "^NDX": ".NDX.US",
+        "NDX": ".NDX.US",
+        "^DJI": ".DJI.US",
+        "DJI": ".DJI.US",
+        "^VIX": ".VIX.US",
+        "VIX": ".VIX.US",
+    }
+    if cleaned in index_aliases:
+        return index_aliases[cleaned]
+    if "." in cleaned:
+        parts = cleaned.split(".")
+        if parts[0].isdigit() and parts[-1] == "HK":
+            parts[0] = str(int(parts[0]))
+            return ".".join(parts)
+        if len(parts) == 2 and parts[0].startswith("^") and parts[1] == "US":
+            return f".{parts[0][1:]}.US"
+        return cleaned
+    if cleaned.isdigit():
+        if len(cleaned) >= 4 and len(cleaned) <= 5:
+            return f"{int(cleaned)}.HK"
+        if cleaned.startswith(("6", "9")):
+            return f"{cleaned}.SH"
+        return f"{cleaned}.SZ"
+    return f"{cleaned}.US"
+
+
+def _run_longbridge_json(args: list[str], *, timeout: float) -> object:
+    executable = shutil.which("longbridge")
+    if executable is None:
+        return []
+    try:
+        completed = subprocess.run(
+            [executable, *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if completed.returncode != 0 or not completed.stdout.strip():
+        return []
+    try:
+        return json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return []
+
+
+def _load_futu_module():
+    try:
+        return importlib.import_module("futu")
+    except ImportError:
+        return None
+
+
+def _normalize_futu_symbol(symbol: str) -> str:
+    cleaned = str(symbol or "").strip().upper()
+    if not cleaned:
+        return "US.AAPL"
+    if cleaned.startswith(("US.", "HK.", "SH.", "SZ.")):
+        return cleaned
+    if "." in cleaned:
+        parts = cleaned.split(".")
+        if len(parts) == 2 and parts[1] in {"US", "HK", "SH", "SZ"}:
+            return f"{parts[1]}.{parts[0]}"
+        return cleaned
+    if cleaned.isdigit():
+        if len(cleaned) == 5:
+            return f"HK.{cleaned}"
+        if cleaned.startswith(("6", "9")):
+            return f"SH.{cleaned}"
+        return f"SZ.{cleaned}"
+    return f"US.{cleaned}"
+
+
+def _longbridge_records(payload: object) -> list[dict]:
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    if isinstance(payload, dict):
+        data = payload.get("data")
+        if isinstance(data, list):
+            return [row for row in data if isinstance(row, dict)]
+        return [payload]
+    return []
+
+
+def _first_longbridge_record(payload: object) -> dict | None:
+    rows = _longbridge_records(payload)
+    return rows[0] if rows else None
+
+
+def _records(data: object) -> list[dict]:
+    if hasattr(data, "to_dict"):
+        records = data.to_dict("records")
+        if isinstance(records, list):
+            return [record for record in records if isinstance(record, dict)]
+    if isinstance(data, list):
+        return [record for record in data if isinstance(record, dict)]
+    return []
+
+
+def _first_number(row: dict, fields: tuple[str, ...]) -> float | None:
+    for field in fields:
+        value = row.get(field)
+        if value is None:
+            continue
+        try:
+            return float(str(value).replace(",", ""))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _longbridge_rank_date(value: object) -> date | None:
+    try:
+        timestamp = int(str(value))
+    except (TypeError, ValueError):
+        return None
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc).date()
+
+
+def _coerce_positive_int(value: object) -> int | None:
+    try:
+        parsed = int(str(value).replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _dedupe_symbols(symbols: list[str]) -> list[str]:
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for symbol in symbols:
+        cleaned = str(symbol or "").strip().upper()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        normalized.append(cleaned)
+    return normalized
+
+
+def _clear_market_history_memory_cache() -> None:
+    _history_cache.clear()

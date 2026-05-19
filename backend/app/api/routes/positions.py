@@ -10,6 +10,9 @@ from app.api.time_normalization import normalize_date_to_iso
 from app.repositories.raw_repository import RawRepository
 from app.services.industry_mapping_service import IndustryMappingService
 from app.services.quote_service import QuoteService
+from app.services.quote_service import fetch_futu_candles
+from app.services.quote_service import fetch_longbridge_candles
+from app.services.quote_service import fetch_longbridge_valuation_rank
 from app.services.quote_service import fetch_nasdaq_candles
 from app.services.quote_service import fetch_yahoo_candles
 from app.services.settings_service import SettingsService
@@ -460,6 +463,7 @@ def _list_symbol_trades(symbol: str, *, fx_rate: float) -> list[dict]:
 def _list_symbol_price_history(symbol: str, *, fx_rate: float) -> list[dict]:
     if _raw_repository is None:
         return []
+    normalized_rows: list[dict] = []
     try:
         rows = _raw_repository.es.search(
             index="ibkr_symbol_price_history_v1",
@@ -468,12 +472,37 @@ def _list_symbol_price_history(symbol: str, *, fx_rate: float) -> list[dict]:
         )
     except RuntimeError as exc:
         if "404" in str(exc):
+            rows = []
+        else:
+            raise
+    normalized_rows.extend(_normalize_symbol_price_rows(rows, symbol=symbol, fx_rate=fx_rate))
+    cached_rows = _list_cached_market_price_history(symbol, fx_rate=fx_rate)
+    return _merge_price_history(normalized_rows, cached_rows)
+
+
+def _list_cached_market_price_history(symbol: str, *, fx_rate: float) -> list[dict]:
+    if _raw_repository is None:
+        return []
+    try:
+        rows = _raw_repository.es.search(
+            index="market_symbol_price_history_v1",
+            size=5000,
+            term_filters={"symbol": symbol.upper()},
+        )
+    except RuntimeError as exc:
+        if "404" in str(exc):
             return []
         raise
+    return _normalize_symbol_price_rows(rows, symbol=symbol, fx_rate=fx_rate)
+
+
+def _normalize_symbol_price_rows(rows: list[dict], *, symbol: str, fx_rate: float) -> list[dict]:
     normalized_rows: list[dict] = []
     for row in rows:
         normalized = dict(row)
         normalized["symbol"] = str(normalized.get("symbol", "") or "").upper()
+        if normalized["symbol"] and normalized["symbol"] != symbol.upper():
+            continue
         normalized["date_iso"] = normalize_date_to_iso(
             normalized.get("date")
             or normalized.get("price_date")
@@ -490,6 +519,17 @@ def _list_symbol_price_history(symbol: str, *, fx_rate: float) -> list[dict]:
             if source_value is not None:
                 normalized[f"{key}_source"] = source_value
                 normalized[key] = convert_money(source_value, fx_rate)
+        passthrough_aliases = {
+            "volume": ["volume", "trade_volume", "turnover_volume"],
+            "pe_ratio": ["pe_ratio", "pe", "trailing_pe", "pe_ttm", "price_earnings_ratio", "price_earnings"],
+            "pe_rank": ["pe_rank", "pe_ttm_rank"],
+            "pe_total": ["pe_total", "pe_ttm_total"],
+            "pe_percentile": ["pe_percentile", "pe_ttm_percentile"],
+        }
+        for key, aliases in passthrough_aliases.items():
+            source_value = next((normalized.get(alias) for alias in aliases if normalized.get(alias) is not None), None)
+            if source_value is not None:
+                normalized[key] = source_value
         normalized_rows.append(normalized)
     normalized_rows.sort(key=lambda row: _compact_date(row.get("date_iso")), reverse=False)
     return normalized_rows
@@ -512,27 +552,110 @@ def _fetch_missing_symbol_price_history(
     )
     if not start_date or not end_date:
         return []
-    candles = fetch_nasdaq_candles(symbol, start_date=start_date, end_date=end_date)
+    candles = fetch_longbridge_candles(symbol, start_date=start_date, end_date=end_date)
+    futu_candles = _fetch_futu_symbol_price_history(symbol, start_date=start_date, end_date=end_date)
+    candles = _merge_external_candles(candles, futu_candles)
+    if len(candles) < 2:
+        candles = fetch_nasdaq_candles(symbol, start_date=start_date, end_date=end_date)
     if len(candles) < 2:
         candles = fetch_yahoo_candles(symbol, start_date=start_date, end_date=end_date)
+    valuation_by_date = fetch_longbridge_valuation_rank(
+        symbol,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    raw_rows: list[dict] = []
     normalized: list[dict] = []
     for candle in candles:
         row = dict(candle)
         row["symbol"] = symbol.upper()
         row["date_iso"] = normalize_date_to_iso(row.get("date_iso") or row.get("date"))
+        row.update(valuation_by_date.get(str(row["date_iso"]), {}))
+        raw_rows.append(dict(row))
         for key in ["open", "high", "low", "close"]:
             source_value = row.get(key)
             row[f"{key}_source"] = source_value
             row[key] = convert_money(source_value, fx_rate)
         normalized.append(row)
     normalized.sort(key=lambda row: _compact_date(row.get("date_iso")), reverse=False)
+    _cache_external_symbol_price_history(symbol, raw_rows)
     return normalized
+
+
+def _fetch_futu_symbol_price_history(symbol: str, *, start_date: str, end_date: str) -> list[dict]:
+    settings = _settings_service.get()
+    if settings.futu_connection_mode == "disabled":
+        return []
+    return fetch_futu_candles(
+        symbol,
+        start_date=start_date,
+        end_date=end_date,
+        host=settings.futu_opend_host,
+        port=settings.futu_opend_port,
+    )
+
+
+def _merge_external_candles(primary: list[dict], enrichment: list[dict]) -> list[dict]:
+    if not enrichment:
+        return primary
+    if not primary:
+        return enrichment
+    merged: dict[str, dict] = {}
+    for row in primary:
+        key = _compact_date(row.get("date_iso") or row.get("date"))
+        if key:
+            merged[key] = dict(row)
+    for row in enrichment:
+        key = _compact_date(row.get("date_iso") or row.get("date"))
+        if not key:
+            continue
+        existing = merged.get(key)
+        if existing is None:
+            merged[key] = dict(row)
+            continue
+        for field in ("volume", "pe_ratio", "turnover_rate", "turnover", "change_rate", "last_close"):
+            if existing.get(field) is None and row.get(field) is not None:
+                existing[field] = row[field]
+        if row.get("source"):
+            existing["enrichment_source"] = row.get("source")
+    rows = list(merged.values())
+    rows.sort(key=lambda row: _compact_date(row.get("date_iso") or row.get("date")), reverse=False)
+    return rows
+
+
+def _cache_external_symbol_price_history(symbol: str, rows: list[dict]) -> None:
+    if _raw_repository is None or not rows:
+        return
+    try:
+        _raw_repository.es.ensure_index("market_symbol_price_history_v1")
+    except AttributeError:
+        return
+    for row in rows:
+        date_iso = normalize_date_to_iso(row.get("date_iso") or row.get("date"))
+        if not date_iso:
+            continue
+        cache_row = dict(row)
+        cache_row["symbol"] = symbol.upper()
+        cache_row["date_iso"] = date_iso
+        cache_row["date"] = date_iso
+        cache_row.setdefault("source", row.get("source") or row.get("enrichment_source") or "external")
+        try:
+            _raw_repository.es.update(
+                index="market_symbol_price_history_v1",
+                id=f"{symbol.upper()}_{date_iso}",
+                doc=cache_row,
+                doc_as_upsert=True,
+            )
+        except Exception:
+            return
 
 
 def _needs_external_price_history(*, local_history: list[dict], trades: list[dict]) -> bool:
     if not trades:
         return len(local_history) == 0
     if not local_history:
+        return True
+    if not _history_has_market_enrichment(local_history):
         return True
     local_dates = {
         _compact_date(row.get("date_iso") or row.get("date") or row.get("price_date") or row.get("report_date"))
@@ -544,6 +667,16 @@ def _needs_external_price_history(*, local_history: list[dict], trades: list[dic
     }
     trade_dates.discard("")
     return any(trade_date not in local_dates for trade_date in trade_dates)
+
+
+def _history_has_market_enrichment(rows: list[dict]) -> bool:
+    has_volume = any(row.get("volume") is not None or row.get("trade_volume") is not None for row in rows)
+    has_pe = any(
+        row.get(key) is not None
+        for row in rows
+        for key in ("pe_ratio", "pe", "trailing_pe", "pe_ttm", "price_earnings_ratio", "price_earnings")
+    )
+    return has_volume and has_pe
 
 
 def _resolve_external_history_range(
@@ -590,7 +723,27 @@ def _merge_price_history(local_history: list[dict], external_history: list[dict]
     for row in local_history:
         key = _compact_date(row.get("date_iso") or row.get("date") or row.get("price_date") or row.get("report_date"))
         if key:
-            merged[key] = row
+            external_row = merged.get(key, {})
+            merged_row = {**external_row, **row}
+            for field in (
+                "volume",
+                "valuation_source",
+                "pe_rank",
+                "pe_total",
+                "pe_percentile",
+                "pe_ttm_rank",
+                "pe_ttm_total",
+                "pe_ttm_percentile",
+                "pb_rank",
+                "pb_total",
+                "pb_percentile",
+                "ps_rank",
+                "ps_total",
+                "ps_percentile",
+            ):
+                if merged_row.get(field) is None and external_row.get(field) is not None:
+                    merged_row[field] = external_row[field]
+            merged[key] = merged_row
     rows = list(merged.values())
     rows.sort(key=lambda row: _compact_date(row.get("date_iso") or row.get("date")), reverse=False)
     return rows

@@ -1,4 +1,11 @@
-import type { ImportContentFile, ImportTaskResponse, RequestQuery } from "./contracts";
+import type {
+  ImportContentFile,
+  ImportTaskResponse,
+  PortfolioAnalysisResponse,
+  RequestQuery,
+  SettingsResponse,
+  SettingsUpdatePayload,
+} from "./contracts";
 
 function buildQuery(query?: RequestQuery): string {
   if (!query) return "";
@@ -59,6 +66,10 @@ export const api = {
   overview: () => getJson<Record<string, unknown>>("/api/overview"),
   overviewBenchmarks: (query?: RequestQuery) => getJson<Record<string, unknown>>("/api/overview/benchmarks", query),
   positions: (query?: RequestQuery) => getJson<Record<string, unknown>>("/api/positions", query),
+  portfolioAnalysis: (query?: RequestQuery) =>
+    getJson<PortfolioAnalysisResponse>("/api/portfolio-analysis", query),
+  refreshPortfolioAnalysisNarrative: (query?: RequestQuery) =>
+    postJson<Record<string, unknown>>(`/api/portfolio-analysis/narrative/refresh${buildQuery(query)}`, {}),
   positionDetail: (symbol: string) => getJson<Record<string, unknown>>(`/api/positions/${encodeURIComponent(symbol)}/detail`),
   industryAllocation: () => getJson<Record<string, unknown>>("/api/positions/industry-allocation"),
   industryMappings: (query?: RequestQuery) => getJson<Record<string, unknown>>("/api/industry-mappings", query),
@@ -69,13 +80,16 @@ export const api = {
   performance: (query?: RequestQuery) => getJson<Record<string, unknown>>("/api/performance", query),
   trades: (query?: RequestQuery) => getJson<Record<string, unknown>>("/api/trades", query),
   cashFlows: (query?: RequestQuery) => getJson<Record<string, unknown>>("/api/cash-flows", query),
-  settings: () => getJson<Record<string, unknown>>("/api/settings"),
-  saveSettings: (payload: unknown) => putJson<Record<string, unknown>>("/api/settings", payload),
+  settings: () => getJson<SettingsResponse>("/api/settings"),
+  saveSettings: (payload: SettingsUpdatePayload) => putJson<SettingsResponse>("/api/settings", payload),
   createImportTask: (files: ImportContentFile[]) =>
     postJson<ImportTaskResponse>("/api/import/tasks/content/create", { files }),
   runImportTask: (runUrl: string) => postJson<ImportTaskResponse>(runUrl),
   runDailySync: () => postJson<Record<string, unknown>>("/api/settings/daily-sync/run"),
   testFinnhub: () => postJson<Record<string, unknown>>("/api/settings/data-sources/finnhub/test", {}),
+  testFutu: () => postJson<Record<string, unknown>>("/api/settings/data-sources/futu/test", {}),
+  testLongbridge: () => postJson<Record<string, unknown>>("/api/settings/data-sources/longbridge/test", {}),
   refreshQuotes: () => postJson<Record<string, unknown>>("/api/settings/data-sources/quotes/refresh"),
+  refreshMarketHistory: () => postJson<Record<string, unknown>>("/api/settings/data-sources/history/refresh", {}),
   testIbkr: () => postJson<Record<string, unknown>>("/api/settings/data-sources/ibkr/test"),
 };

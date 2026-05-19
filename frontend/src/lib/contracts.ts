@@ -6,7 +6,7 @@ export type PageKey =
   | "performance"
   | "trades"
   | "settings"
-  | "stockAnalysis";
+  | "portfolioAnalysis";
 
 export type QueryValue = string | number | boolean | null | undefined;
 
@@ -21,6 +21,253 @@ export interface ListResponse {
   summary?: ApiRecord;
   monthly_stats?: ApiRecord[];
 }
+
+export type AnalysisStatus =
+  | "ready"
+  | "pending"
+  | "missing_data"
+  | "stale"
+  | "unavailable"
+  | "error";
+
+export type PortfolioAnalysisSectionKey = "market" | "portfolio" | "stock";
+
+export interface StandardMetric {
+  value: string | number | boolean | null;
+  unit: string | null;
+  source: string;
+  as_of: string | null;
+  confidence: number | null;
+  status: AnalysisStatus;
+  reason: string | null;
+}
+
+export interface EChartsSeries {
+  name: string;
+  points: Array<Record<string, string | number | null>>;
+}
+
+export interface EChartsPayload {
+  chart_type: string;
+  title: string;
+  unit: string | null;
+  status: AnalysisStatus;
+  source: string;
+  as_of: string | null;
+  series: EChartsSeries[];
+  options: ApiRecord;
+}
+
+export interface AINarrativePayload {
+  provider: string;
+  model: string | null;
+  status: AnalysisStatus;
+  summary: string | null;
+  bullets: string[];
+  risks: string[];
+  source_metrics: string[];
+  as_of: string | null;
+  confidence: number | null;
+  reason: string | null;
+}
+
+export interface TelegramStatusPayload {
+  enabled: boolean;
+  status: AnalysisStatus;
+  allowlisted_chat_ids_count: number;
+  schedule: string | null;
+  last_delivery_at: string | null;
+  source: string;
+  as_of: string | null;
+  reason: string | null;
+}
+
+export interface MCPToolPayload {
+  tool: string;
+  status: AnalysisStatus;
+  data: ApiRecord;
+  generated_at: string | null;
+  warnings: string[];
+}
+
+export interface MarketAnalysisSection {
+  status: AnalysisStatus;
+  regime: StandardMetric;
+  indicators: Record<string, StandardMetric>;
+  market_pulse: ApiRecord[];
+  playbook: ApiRecord[];
+  strategy: ApiRecord[];
+  portfolio_impact: string[];
+  watch_symbols: string[];
+  opportunities: string[];
+  reasons: string[];
+  risks: string[];
+  charts: EChartsPayload[];
+  narrative: AINarrativePayload;
+}
+
+export interface PortfolioRiskRow {
+  symbol: string;
+  current_price: number | null;
+  weight_pct: number;
+  unrealized_pnl: number | null;
+  ai_relevance: string;
+  ai_relevance_reason: string | null;
+  logic_status: string;
+  recommendation: string;
+  risk_points: string[];
+  tracking_points: string[];
+  position_role: string | null;
+  evidence: string[];
+  status: AnalysisStatus;
+  confidence: number | null;
+  source: string;
+  as_of: string | null;
+  reason: string | null;
+}
+
+export interface PortfolioRebalanceAdvice {
+  cards: ApiRecord[];
+  action_today: string | null;
+  thinking_prompt: string | null;
+  market_note: string | null;
+  research_direction: string | null;
+  undervalued_symbols: string | null;
+  crowded_symbols: string | null;
+  catalysts_30d: string | null;
+  data_90d: string | null;
+  optimal_structure: string | null;
+  invalidation: string | null;
+  status: AnalysisStatus;
+  source: string;
+  as_of: string | null;
+  confidence: number | null;
+  reason: string | null;
+}
+
+export interface PortfolioRiskSection {
+  status: AnalysisStatus;
+  concentration: Record<string, StandardMetric>;
+  factor_exposure: Record<string, StandardMetric>;
+  correlation: Record<string, StandardMetric>;
+  tail_risk: Record<string, StandardMetric>;
+  macro_sensitivity: Record<string, StandardMetric>;
+  alerts: ApiRecord[];
+  hedge_suggestions: string[];
+  greeks: Record<string, StandardMetric>;
+  expiration_risk: Record<string, StandardMetric>;
+  advisor_facts: StandardMetric[];
+  risk_rows: PortfolioRiskRow[];
+  rebalance_advice: PortfolioRebalanceAdvice;
+  analysis_meta: ApiRecord;
+  charts: EChartsPayload[];
+  narrative: AINarrativePayload;
+}
+
+export interface StockSelectionOption {
+  symbol: string;
+  label: string;
+  weight_pct: number;
+  market_value: number | null;
+  quantity: number | null;
+  source: string;
+}
+
+export interface StockResearchMemo {
+  status: AnalysisStatus;
+  symbol: string | null;
+  one_line_view: string | null;
+  position_role: string | null;
+  logic_status: string | null;
+  ai_relevance: string | null;
+  holding_thesis: string[];
+  facts: string[];
+  inferences: string[];
+  portfolio_impact: string[];
+  key_risks: string[];
+  tracking_questions: string[];
+  invalidation_signals: string[];
+  read_only_suggestion: string | null;
+  source: string;
+  as_of: string | null;
+  confidence: number | null;
+  reason: string | null;
+}
+
+export interface StockAnalysisSection {
+  status: AnalysisStatus;
+  symbol: string | null;
+  available_symbols: StockSelectionOption[];
+  memo: StockResearchMemo;
+  profile: Record<string, StandardMetric>;
+  indicators: Record<string, StandardMetric>;
+  direction: string | null;
+  core_changes: string[];
+  portfolio_impact: string[];
+  beneficiaries: string[];
+  market_mispricing: string[];
+  watch_signals: string[];
+  evidence_links: Array<{ label: string; url: string }>;
+  risks: string[];
+  charts: EChartsPayload[];
+  narrative: AINarrativePayload;
+}
+
+export interface PortfolioAnalysisResponse {
+  status: AnalysisStatus;
+  active_section: PortfolioAnalysisSectionKey | null;
+  generated_at: string | null;
+  display_currency: string;
+  valuation_mode: string;
+  request: {
+    section: PortfolioAnalysisSectionKey | null;
+    symbol: string | null;
+  };
+  sections: {
+    market: MarketAnalysisSection;
+    portfolio: PortfolioRiskSection;
+    stock: StockAnalysisSection;
+  };
+  integrations: {
+    ai: AINarrativePayload;
+    telegram: TelegramStatusPayload;
+    mcp_tools: MCPToolPayload[];
+  };
+  links: Record<string, string>;
+}
+
+export type AiProvider = "openai" | "minimax" | "mock";
+
+export type FutuConnectionMode = "disabled" | "local_opend" | "longbridge";
+
+export interface SettingsResponse {
+  base_currency: string;
+  timezone: string;
+  finnhub_api_key: string;
+  flex_token: string;
+  flex_query_id: string;
+  pull_frequency_minutes: number;
+  display_realtime_prices: boolean;
+  ai_provider: AiProvider;
+  openai_api_key: string;
+  minimax_api_key: string;
+  minimax_base_url: string;
+  futu_connection_mode: FutuConnectionMode;
+  futu_opend_host: string;
+  futu_opend_port: number;
+  telegram_bot_token: string;
+  telegram_allowlisted_chat_ids: string[];
+  telegram_reports_enabled: boolean;
+  telegram_daily_report_time: string;
+  mcp_server_enabled: boolean;
+  report_cache_enabled: boolean;
+  report_cache_ttl_minutes: number;
+  last_successful_sync_at: string | null;
+  last_successful_sync_date: string | null;
+  last_successful_sync_at_local?: string | null;
+}
+
+export type SettingsUpdatePayload = Partial<SettingsResponse>;
 
 export interface ImportContentFile {
   filename: string;
