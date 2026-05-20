@@ -282,9 +282,19 @@ export interface OverviewBenchmarkBeta {
   symbol: string;
   status: OverviewRiskWarningStatus;
   portfolio_beta: number | null;
-  source: string;
-  reason: string | null;
-  updated_at: string | null;
+  source?: string;
+  reason?: string | null;
+  updated_at?: string | null;
+  valid_positions?: number;
+  missing_positions?: number;
+}
+
+export interface OverviewPositionBetaValue {
+  value: number | null;
+  weighted_contribution?: number | null;
+  observations?: number;
+  status?: "ready" | "missing_data";
+  reason?: string | null;
 }
 
 export interface OverviewPositionBeta {
@@ -292,9 +302,9 @@ export interface OverviewPositionBeta {
   name?: string | null;
   weight_pct: number | null;
   market_value: number | null;
-  beta: number | null;
+  beta: number | OverviewPositionBetaValue | null;
   benchmark_key?: OverviewRiskBenchmarkKey;
-  betas?: Partial<Record<OverviewRiskBenchmarkKey, number | null>>;
+  betas?: Partial<Record<OverviewRiskBenchmarkKey, OverviewPositionBetaValue | number | null>>;
   status: "ready" | "missing_data";
   source: string;
   reason: string | null;
@@ -303,13 +313,17 @@ export interface OverviewPositionBeta {
 export interface OverviewStressScenario {
   key?: string;
   label: string;
-  drawdown_pct: number;
+  drawdown_pct: number | null;
   portfolio_beta: number | null;
+  estimated_loss?: number | null;
   stress_loss: number | null;
   projected_equity: number | null;
+  equity_loss_pct?: number | null;
+  multiplier?: number | null;
   status: OverviewRiskWarningStatus;
   source: string;
   reason: string | null;
+  risk_note?: string;
 }
 
 export interface OverviewRiskWarningResponse {

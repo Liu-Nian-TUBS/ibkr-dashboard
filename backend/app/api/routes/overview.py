@@ -1262,10 +1262,12 @@ def _stress_scenario(
     source: str,
 ) -> dict:
     estimated_loss = None
+    projected_equity = None
     equity_loss_pct = None
     status = "calculating" if portfolio_beta is None else "ready"
     if portfolio_beta is not None:
         estimated_loss = round(total_market_value * portfolio_beta * (drawdown_pct / 100), 2)
+        projected_equity = round(equity + estimated_loss, 2) if equity else None
         if equity:
             equity_loss_pct = round(estimated_loss / equity * 100, 2)
     risk_note = "Beta 数据不足，等待历史价格计算。"
@@ -1284,9 +1286,12 @@ def _stress_scenario(
         "portfolio_beta": round(portfolio_beta, 4) if portfolio_beta is not None else None,
         "multiplier": round(portfolio_beta, 2) if portfolio_beta is not None else None,
         "estimated_loss": estimated_loss,
+        "stress_loss": estimated_loss,
+        "projected_equity": projected_equity,
         "equity_loss_pct": equity_loss_pct,
         "status": status,
         "source": source,
+        "reason": None if portfolio_beta is not None else "Beta 计算中 / 数据不足",
         "risk_note": risk_note,
     }
 
@@ -1461,11 +1466,20 @@ def get_overview_risk_warning(
                 "status": "ready" if valid_positions and not missing_positions else "partial" if valid_positions else "missing_data",
                 "valid_positions": valid_positions,
                 "missing_positions": missing_positions,
+                "source": "market_history",
+                "reason": None if valid_positions else "insufficient_overlapping_history",
+                "updated_at": beta_updated_at,
             }
         )
 
     selected = next((item for item in benchmark_rows if item["key"] == selected_benchmark), None)
     portfolio_beta = selected.get("portfolio_beta") if selected else None
+    for position_row in position_rows_by_symbol.values():
+        beta_detail = position_row.get("betas", {}).get(selected_benchmark, {})
+        position_row["beta"] = beta_detail.get("value")
+        position_row["status"] = beta_detail.get("status", "missing_data")
+        position_row["source"] = "market_history"
+        position_row["reason"] = beta_detail.get("reason")
     scenario_source = f"ols_beta_{beta_window}_day_{selected_benchmark}"
     scenarios = [
         _stress_scenario(
@@ -1501,9 +1515,12 @@ def get_overview_risk_warning(
             "portfolio_beta": None,
             "multiplier": None,
             "estimated_loss": display_loss,
+            "stress_loss": display_loss,
+            "projected_equity": round(equity + display_loss, 2) if equity else None,
             "equity_loss_pct": round(display_loss / equity * 100, 2) if equity else None,
             "status": "ready",
             "source": "ibkr_position_snapshots_v1",
+            "reason": None,
             "risk_note": "基于持仓当日负向变化估算，用于和 Beta 情景横向比较。",
         }
 

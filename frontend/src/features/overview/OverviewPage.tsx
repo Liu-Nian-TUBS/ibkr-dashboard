@@ -329,129 +329,133 @@ function OverviewContent({
       </section>
 
       <section className="overview-main-grid">
-        <Surface
-          title={`账户净值走势（${currency}）`}
-          action={
-            <div className="surface-action-group">
-              <SegmentedControl
-                label="指标"
-                options={[
-                  { key: "simple" as const, label: "简单加权" },
-                  { key: "twr" as const, label: "时间加权" },
-                  { key: "cash" as const, label: "现金加权" },
-                ]}
-                value={method}
-                onChange={setMethod}
-              />
-              <SegmentedControl
-                label="区间"
-                options={[
-                  { key: "1w" as const, label: "1W" },
-                  { key: "1m" as const, label: "1M" },
-                  { key: "3m" as const, label: "3M" },
-                  { key: "6m" as RangeKey, label: "6M" },
-                  { key: "ytd" as const, label: "YTD" },
-                  { key: "1y" as const, label: "1Y" },
-                  { key: "all" as const, label: "All" },
-                ].filter((item) => RANGE_OPTIONS.some((option) => option.key === item.key))}
-                value={range}
-                onChange={setRange}
-              />
-            </div>
-          }
-          className="overview-surface overview-chart-panel"
-        >
-          {range === "custom" ? (
-            <div className="date-range-inline">
-              <label>
-                <span>开始</span>
-                <input
-                  type="date"
-                  value={customStart || defaultCustomStart}
-                  max={customEnd || defaultCustomEnd}
-                  onChange={(event) => setCustomStart(event.target.value)}
+        <div className="overview-main-stack">
+          <Surface
+            title={`账户净值走势（${currency}）`}
+            action={
+              <div className="surface-action-group">
+                <SegmentedControl
+                  label="指标"
+                  options={[
+                    { key: "simple" as const, label: "简单加权" },
+                    { key: "twr" as const, label: "时间加权" },
+                    { key: "cash" as const, label: "现金加权" },
+                  ]}
+                  value={method}
+                  onChange={setMethod}
                 />
-              </label>
-              <label>
-                <span>结束</span>
-                <input
-                  type="date"
-                  value={customEnd || defaultCustomEnd}
-                  min={customStart || defaultCustomStart}
-                  onChange={(event) => setCustomEnd(event.target.value)}
-                />
-              </label>
-            </div>
-          ) : null}
-
-          <TrendChart
-            currency={currency}
-            emptyTitle="净值快照不足"
-            emptyDetail="导入更多账户快照后显示净值曲线。"
-            series={[
-              portfolioReturnSeries,
-              ...benchmarkReturnSeries,
-            ]}
-            events={selectedFlows}
-            summary={
-              <div className="chart-kpi-pair">
-                <ChartKpi
-                  label="累计收益"
-                  value={formatCurrency(returnSummary.amount, currency)}
-                  tone={deltaClass(returnSummary.amount ?? 0)}
-                />
-                <ChartKpi
-                  label="收益率"
-                  value={formatPercent(returnSummary.rate)}
-                  tone={deltaClass(returnSummary.rate ?? 0)}
+                <SegmentedControl
+                  label="区间"
+                  options={[
+                    { key: "1w" as const, label: "1W" },
+                    { key: "1m" as const, label: "1M" },
+                    { key: "3m" as const, label: "3M" },
+                    { key: "6m" as RangeKey, label: "6M" },
+                    { key: "ytd" as const, label: "YTD" },
+                    { key: "1y" as const, label: "1Y" },
+                    { key: "all" as const, label: "All" },
+                  ].filter((item) => RANGE_OPTIONS.some((option) => option.key === item.key))}
+                  value={range}
+                  onChange={setRange}
                 />
               </div>
             }
-          />
-        </Surface>
+            className="overview-surface overview-chart-panel"
+          >
+            {range === "custom" ? (
+              <div className="date-range-inline">
+                <label>
+                  <span>开始</span>
+                  <input
+                    type="date"
+                    value={customStart || defaultCustomStart}
+                    max={customEnd || defaultCustomEnd}
+                    onChange={(event) => setCustomStart(event.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>结束</span>
+                  <input
+                    type="date"
+                    value={customEnd || defaultCustomEnd}
+                    min={customStart || defaultCustomStart}
+                    onChange={(event) => setCustomEnd(event.target.value)}
+                  />
+                </label>
+              </div>
+            ) : null}
 
-        <OverviewRiskWarning data={data} currency={currency} section="dashboard" />
-      </section>
+            <TrendChart
+              currency={currency}
+              emptyTitle="净值快照不足"
+              emptyDetail="导入更多账户快照后显示净值曲线。"
+              series={[
+                portfolioReturnSeries,
+                ...benchmarkReturnSeries,
+              ]}
+              events={selectedFlows}
+              summary={
+                <div className="chart-kpi-pair">
+                  <ChartKpi
+                    label="累计收益"
+                    value={formatCurrency(returnSummary.amount, currency)}
+                    tone={deltaClass(returnSummary.amount ?? 0)}
+                  />
+                  <ChartKpi
+                    label="收益率"
+                    value={formatPercent(returnSummary.rate)}
+                    tone={deltaClass(returnSummary.rate ?? 0)}
+                  />
+                </div>
+              }
+            />
+          </Surface>
 
-      <section className="overview-bottom-grid">
-        <Surface className="overview-table-panel">
-          <div className="overview-inline-title" title={`更新：${updatedAt}`}>
-            <h2>账户净值与资金曲线数据</h2>
-            <span className="overview-info-dot" title={`更新：${updatedAt}`}>!</span>
-          </div>
-          <DataTable
-            rows={assetMetricRows}
-            empty="暂无资金曲线数据"
-            columns={[
-              { key: "label", label: "指标" },
-              { key: "today", label: "今日", align: "right", render: (row) => formatCurrency(row.today, asText(row.currency, currency)) },
-              { key: "previous", label: "昨日", align: "right", render: (row) => row.previous === null || row.previous === undefined ? "-" : formatCurrency(row.previous, asText(row.currency, currency)) },
-              { key: "change", label: "变化", align: "right", render: (row) => <span className={`delta-text delta-text--${deltaClass(row.change)}`}>{row.change === null || row.change === undefined ? "-" : formatCurrency(row.change, asText(row.currency, currency))}</span> },
-              { key: "change_rate", label: "变化率", align: "right", render: (row) => <span className={`delta-text delta-text--${deltaClass(row.change_rate)}`}>{formatPercent(row.change_rate)}</span> },
-            ]}
-          />
-        </Surface>
+          <section className="overview-bottom-grid">
+            <div className="overview-data-column">
+              <Surface className="overview-table-panel">
+                <div className="overview-inline-title" title={`更新：${updatedAt}`}>
+                  <h2>账户净值与资金曲线数据</h2>
+                  <span className="overview-info-dot" title={`更新：${updatedAt}`}>!</span>
+                </div>
+                <DataTable
+                  rows={assetMetricRows}
+                  empty="暂无资金曲线数据"
+                  columns={[
+                    { key: "label", label: "指标" },
+                    { key: "today", label: "今日", align: "right", render: (row) => formatCurrency(row.today, asText(row.currency, currency)) },
+                    { key: "previous", label: "昨日", align: "right", render: (row) => row.previous === null || row.previous === undefined ? "-" : formatCurrency(row.previous, asText(row.currency, currency)) },
+                    { key: "change", label: "变化", align: "right", render: (row) => <span className={`delta-text delta-text--${deltaClass(row.change)}`}>{row.change === null || row.change === undefined ? "-" : formatCurrency(row.change, asText(row.currency, currency))}</span> },
+                    { key: "change_rate", label: "变化率", align: "right", render: (row) => <span className={`delta-text delta-text--${deltaClass(row.change_rate)}`}>{formatPercent(row.change_rate)}</span> },
+                  ]}
+                />
+              </Surface>
 
-        <Surface className="overview-table-panel">
-          <div className="overview-inline-title">
-            <h2>最近交易</h2>
-            <span className="overview-section-caption">（近 5 笔）</span>
-          </div>
-          <DataTable
-            rows={recentTrades}
-            empty="暂无交易记录"
-            columns={[
-              { key: "trade_date", label: "时间", render: (row) => formatDateTimeMinute(row.trade_date ?? row.trade_date_iso) },
-              { key: "symbol", label: "代码" },
-              { key: "side", label: "方向", render: (row) => <span className={`trade-side trade-side--${asText(row.side, "").toLowerCase()}`}>{asText(row.side)}</span> },
-              { key: "quantity", label: "数量", align: "right", render: (row) => formatNumber(row.quantity, 0) },
-              { key: "notional_signed", label: "金额", align: "right", render: (row) => <span className={`delta-text delta-text--${deltaClass(row.notional_signed)}`}>{formatCurrency(row.notional_signed, asText(row.currency, currency))}</span> },
-            ]}
-          />
-          <button type="button" className="link-button overview-all-trades" onClick={() => onNavigate?.("trades")}>
-            全部交易
-          </button>
-        </Surface>
+              <Surface className="overview-table-panel">
+                <div className="overview-inline-title">
+                  <h2>最近交易</h2>
+                  <span className="overview-section-caption">（近 5 笔）</span>
+                </div>
+                <DataTable
+                  rows={recentTrades}
+                  empty="暂无交易记录"
+                  columns={[
+                    { key: "trade_date", label: "时间", render: (row) => formatDateTimeMinute(row.trade_date ?? row.trade_date_iso) },
+                    { key: "symbol", label: "代码" },
+                    { key: "side", label: "方向", render: (row) => <span className={`trade-side trade-side--${asText(row.side, "").toLowerCase()}`}>{asText(row.side)}</span> },
+                    { key: "quantity", label: "数量", align: "right", render: (row) => formatNumber(row.quantity, 0) },
+                    { key: "notional_signed", label: "金额", align: "right", render: (row) => <span className={`delta-text delta-text--${deltaClass(row.notional_signed)}`}>{formatCurrency(row.notional_signed, asText(row.currency, currency))}</span> },
+                  ]}
+                />
+                <button type="button" className="link-button overview-all-trades" onClick={() => onNavigate?.("trades")}>
+                  全部交易
+                </button>
+              </Surface>
+            </div>
+
+            <OverviewRiskWarning data={data} currency={currency} section="dashboard" />
+          </section>
+        </div>
 
         <OverviewRiskWarning data={data} currency={currency} section="beta" />
       </section>
