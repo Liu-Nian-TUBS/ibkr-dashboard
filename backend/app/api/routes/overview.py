@@ -1,5 +1,6 @@
 from datetime import date
 from datetime import datetime
+from datetime import timedelta
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter
@@ -44,6 +45,19 @@ _BENCHMARKS = [
     {"key": "nasdaq", "label": "纳斯达克", "symbol": "^IXIC"},
     {"key": "qqq", "label": "QQQ", "symbol": "QQQ"},
 ]
+_RISK_BENCHMARKS = [
+    {"key": "qqq", "label": "NDX100 / QQQ", "symbol": "QQQ"},
+    {"key": "nasdaq", "label": "NASDAQ Composite", "symbol": "^IXIC"},
+    {"key": "sp500", "label": "S&P 500", "symbol": "^GSPC"},
+]
+_BETA_WINDOWS = {30, 60, 90, 120}
+_SEVERITY_ORDER = {"healthy": 0, "watch": 1, "caution": 2, "alert": 3}
+_SEVERITY_LABELS = {
+    "healthy": "健康",
+    "watch": "关注",
+    "caution": "警戒",
+    "alert": "预警",
+}
 
 
 def _benchmark_placeholders() -> list[dict]:
@@ -88,6 +102,12 @@ def set_benchmark_history_fetcher(
 def _empty_overview(sync_at: str | None) -> dict:
     timezone_name = _settings_service.get().timezone
     display_currency = _settings_service.get().base_currency
+    valuation_mode = "realtime" if _settings_service.get().display_realtime_prices else "snapshot"
+    benchmark_series = _benchmark_placeholders()
+    sync_at_local = normalize_datetime_to_local_iso(
+        sync_at,
+        timezone_name=timezone_name,
+    )
     return {
         "report_date": None,
         "report_date_iso": None,
@@ -99,7 +119,7 @@ def _empty_overview(sync_at: str | None) -> dict:
         "market_value": 0,
         "display_currency": display_currency,
         "display_values": {"equity": 0, "cash": 0, "market_value": 0},
-        "valuation_mode": "realtime" if _settings_service.get().display_realtime_prices else "snapshot",
+        "valuation_mode": valuation_mode,
         "daily_change": 0.0,
         "daily_return": None,
         "realized_pnl": 0.0,
@@ -118,13 +138,23 @@ def _empty_overview(sync_at: str | None) -> dict:
         "top_holdings": [],
         "equity_curve": [],
         "asset_flow_events": [],
-        "benchmark_series": _benchmark_placeholders(),
+        "benchmark_series": benchmark_series,
+        "asset_metric_rows": [],
+        "recent_trades": [],
+        "ai_summary": {
+            "status": "pending",
+            "title": "AI Summary",
+            "headline": "AI 摘要待接入",
+            "bullets": [],
+            "updated_at": None,
+        },
+        "risk_dashboard": _missing_risk_dashboard(sync_at_local),
         "net_value_curve": {
             "rows": [],
             "cash_flow_events": [],
             "calculation_methods": _RETURN_METHODS,
             "range_options": _RANGE_OPTIONS,
-            "benchmark_series": _benchmark_placeholders(),
+            "benchmark_series": benchmark_series,
         },
         "total_asset_trend": {
             "rows": [],
@@ -134,9 +164,18 @@ def _empty_overview(sync_at: str | None) -> dict:
             "daily_change": 0,
         },
         "last_successful_sync_at": sync_at,
-        "last_successful_sync_at_local": normalize_datetime_to_local_iso(
-            sync_at,
-            timezone_name=timezone_name,
+        "last_successful_sync_at_local": sync_at_local,
+        "ui_summary": _build_ui_summary(
+            report_date_iso=None,
+            valuation_mode=valuation_mode,
+            valuation_as_of=None,
+            valuation_as_of_local=None,
+            last_successful_sync_at=sync_at,
+            last_successful_sync_at_local=sync_at_local,
+            positions_count=0,
+            top_holdings=[],
+            market_value=0,
+            benchmark_series=benchmark_series,
         ),
     }
 
@@ -146,6 +185,459 @@ def _to_float(value: object) -> float:
         return float(value or 0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _benchmark_status(benchmark_series: list[dict]) -> str:
+    if any(item.get("status") == "ready" and len(item.get("points") or []) > 1 for item in benchmark_series):
+        return "ready"
+    if any(item.get("status") == "pending" for item in benchmark_series):
+        return "pending"
+    if benchmark_series:
+        return "unavailable"
+    return "unavailable"
+
+
+def _build_concentration_preview(
+    *,
+    top_holdings: list[dict],
+    market_value: object,
+    positions_count: int,
+) -> dict:
+    if positions_count <= 0 or not top_holdings:
+        return {
+            "status": "missing_data",
+            "positions_count": positions_count,
+            "top_holding_symbol": None,
+            "top_holding_weight_pct": None,
+            "top5_weight_pct": None,
+            "label": "暂无持仓集中度数据",
+        }
+
+    denominator = abs(_to_float(market_value))
+    if denominator <= 1e-9:
+        denominator = sum(abs(_to_float(item.get("market_value"))) for item in top_holdings)
+    if denominator <= 1e-9:
+        return {
+            "status": "missing_data",
+            "positions_count": positions_count,
+            "top_holding_symbol": None,
+            "top_holding_weight_pct": None,
+            "top5_weight_pct": None,
+            "label": f"已导入 {positions_count} 个持仓",
+        }
+
+    top_holding = top_holdings[0]
+    top_weight = abs(_to_float(top_holding.get("market_value"))) / denominator * 100
+    top5_weight = sum(abs(_to_float(item.get("market_value"))) for item in top_holdings[:5]) / denominator * 100
+    top_symbol = str(top_holding.get("symbol") or "") or None
+    return {
+        "status": "ready",
+        "positions_count": positions_count,
+        "top_holding_symbol": top_symbol,
+        "top_holding_weight_pct": round(top_weight, 2),
+        "top5_weight_pct": round(top5_weight, 2),
+        "label": f"最大持仓占比 {top_weight:.1f}%",
+    }
+
+
+def _build_ui_summary(
+    *,
+    report_date_iso: str | None,
+    valuation_mode: str,
+    valuation_as_of: str | None,
+    valuation_as_of_local: str | None,
+    last_successful_sync_at: str | None,
+    last_successful_sync_at_local: str | None,
+    positions_count: int,
+    top_holdings: list[dict],
+    market_value: object,
+    benchmark_series: list[dict],
+) -> dict:
+    concentration_preview = _build_concentration_preview(
+        top_holdings=top_holdings,
+        market_value=market_value,
+        positions_count=positions_count,
+    )
+    warnings: list[str] = []
+    reasons: list[str] = []
+    if not report_date_iso:
+        status = "missing_data"
+        status_label = "暂无导入数据"
+        reasons.append("请先导入 IBKR Flex XML")
+    elif positions_count <= 0:
+        status = "partial"
+        status_label = "数据不完整"
+        warnings.append("当前快照未解析到持仓摘要")
+    else:
+        status = "ready"
+        status_label = "数据已就绪"
+
+    if not last_successful_sync_at:
+        reasons.append("尚无成功同步记录")
+
+    if valuation_mode == "realtime":
+        valuation_label = f"实时价格 {valuation_as_of_local or valuation_as_of or '待更新'}"
+        quote_source_label = "实时行情"
+    else:
+        valuation_label = f"XML 快照 {report_date_iso or '待导入'}"
+        quote_source_label = "XML 快照价格"
+
+    return {
+        "status": status,
+        "status_label": status_label,
+        "valuation_mode": valuation_mode,
+        "valuation_label": valuation_label,
+        "valuation_as_of": valuation_as_of,
+        "valuation_as_of_local": valuation_as_of_local,
+        "report_date_iso": report_date_iso,
+        "last_successful_sync_at": last_successful_sync_at,
+        "last_successful_sync_at_local": last_successful_sync_at_local,
+        "data_source_label": f"IBKR Flex XML / {report_date_iso}" if report_date_iso else "IBKR Flex XML 未导入",
+        "quote_source_label": quote_source_label,
+        "positions_count": positions_count,
+        "benchmark_status": _benchmark_status(benchmark_series),
+        "warnings": warnings,
+        "reasons": reasons,
+        "concentration_preview": concentration_preview,
+    }
+
+
+def _risk_metric(
+    *,
+    key: str,
+    label: str,
+    value: float | None,
+    severity: str,
+    threshold_label: str,
+    source: str,
+    reason: str,
+    action: str,
+    progress_limit: float,
+) -> dict:
+    status = "ready" if value is not None else "missing_data"
+    progress_pct = None
+    if value is not None and progress_limit > 0:
+        progress_pct = round(max(0.0, min(abs(value) / progress_limit * 100, 100.0)), 2)
+    return {
+        "key": key,
+        "label": label,
+        "value": round(value, 2) if value is not None else None,
+        "unit": "percent",
+        "status": status,
+        "severity": severity,
+        "severity_label": _SEVERITY_LABELS.get(severity, severity),
+        "threshold_label": threshold_label,
+        "progress_pct": progress_pct,
+        "source": source,
+        "reason": reason,
+        "action": action,
+    }
+
+
+def _severity_for_net_exposure(value: float | None) -> str:
+    if value is None:
+        return "watch"
+    if value <= 100:
+        return "healthy"
+    if value <= 120:
+        return "caution"
+    return "alert"
+
+
+def _severity_for_margin_usage(value: float | None) -> str:
+    if value is None:
+        return "watch"
+    if value <= 20:
+        return "healthy"
+    if value <= 30:
+        return "caution"
+    return "alert"
+
+
+def _severity_for_largest_holding(value: float | None) -> str:
+    if value is None:
+        return "watch"
+    if value <= 15:
+        return "healthy"
+    if value <= 25:
+        return "watch"
+    if value <= 35:
+        return "caution"
+    return "alert"
+
+
+def _severity_for_top3(value: float | None) -> str:
+    if value is None:
+        return "watch"
+    if value <= 40:
+        return "healthy"
+    if value <= 60:
+        return "watch"
+    if value <= 75:
+        return "caution"
+    return "alert"
+
+
+def _severity_for_downside_breadth(value: float | None) -> str:
+    if value is None:
+        return "watch"
+    if value <= 40:
+        return "healthy"
+    if value <= 60:
+        return "watch"
+    return "alert"
+
+
+def _position_market_value(position: dict) -> float:
+    return _to_float(
+        position.get("market_value")
+        or position.get("market_value_snapshot")
+        or position.get("position_value")
+    )
+
+
+def _position_quantity(position: dict) -> float:
+    return _to_float(position.get("quantity", position.get("position", 0)))
+
+
+def _position_current_price(position: dict) -> float:
+    return _to_float(position.get("mark_price_snapshot") or position.get("realtime_price"))
+
+
+def _position_daily_change_pct(position: dict) -> float | None:
+    if position.get("daily_change_pct") not in (None, ""):
+        return _to_float(position.get("daily_change_pct"))
+    current = _position_current_price(position)
+    previous = _to_float(position.get("previous_mark_price_snapshot") or position.get("previous_price"))
+    if current and previous:
+        return (current - previous) / previous
+    if position.get("daily_change") not in (None, ""):
+        amount = _to_float(position.get("daily_change"))
+        if amount > 0:
+            return 0.000001
+        if amount < 0:
+            return -0.000001
+        return 0.0
+    return None
+
+
+def _position_daily_change_amount(position: dict) -> float | None:
+    current = _position_current_price(position)
+    previous = _to_float(position.get("previous_mark_price_snapshot") or position.get("previous_price"))
+    quantity = abs(_position_quantity(position)) or 1.0
+    if current and previous:
+        return (current - previous) * quantity
+    if position.get("daily_change") not in (None, ""):
+        return _to_float(position.get("daily_change")) * quantity
+    return None
+
+
+def _with_position_daily_changes(current_rows: list[dict], all_rows: list[dict], latest_date: str) -> list[dict]:
+    previous_dates = sorted(
+        {
+            str(row.get("report_date", "") or "")
+            for row in all_rows
+            if str(row.get("report_date", "") or "") < latest_date
+        }
+    )
+    if not previous_dates:
+        return [dict(row) for row in current_rows]
+    previous_date = previous_dates[-1]
+    previous_rows = [
+        row for row in all_rows
+        if str(row.get("report_date", "") or "") == previous_date
+        and str(row.get("level_of_detail", "") or "").upper() == "SUMMARY"
+    ]
+    previous_by_symbol = {str(row.get("symbol", "") or "").upper(): row for row in previous_rows}
+    enriched: list[dict] = []
+    for row in current_rows:
+        item = dict(row)
+        symbol = str(item.get("symbol", "") or "").upper()
+        previous = previous_by_symbol.get(symbol)
+        if previous is not None:
+            previous_price = _position_current_price(previous)
+            current_price = _position_current_price(item)
+            if previous_price:
+                item["previous_mark_price_snapshot"] = previous_price
+                if current_price:
+                    item.setdefault("daily_change", round(current_price - previous_price, 6))
+                    item.setdefault("daily_change_pct", round((current_price - previous_price) / previous_price, 6))
+        enriched.append(item)
+    return enriched
+
+
+def _downside_breadth_pct(current_positions: list[dict], all_positions: list[dict], latest_date: str) -> tuple[float | None, str]:
+    rows = [
+        row for row in _with_position_daily_changes(current_positions, all_positions, latest_date)
+        if abs(_position_market_value(row)) > 1e-9
+    ]
+    if not rows:
+        return None, "no_active_positions"
+    known_changes = [
+        change for change in (_position_daily_change_pct(row) for row in rows)
+        if change is not None
+    ]
+    if not known_changes:
+        return None, "previous_position_prices_unavailable"
+    downside = sum(1 for change in known_changes if change < 0)
+    return downside / len(known_changes) * 100, f"{downside}/{len(known_changes)} positions_down"
+
+
+def _daily_loss_at_risk(current_positions: list[dict], all_positions: list[dict], latest_date: str) -> float | None:
+    rows = _with_position_daily_changes(current_positions, all_positions, latest_date)
+    losses = [
+        min(change, 0.0)
+        for change in (_position_daily_change_amount(row) for row in rows)
+        if change is not None
+    ]
+    if not losses:
+        return None
+    return round(sum(losses), 2)
+
+
+def _missing_risk_dashboard(updated_at: str | None) -> dict:
+    metrics = [
+        _risk_metric(
+            key=key,
+            label=label,
+            value=None,
+            severity="watch",
+            threshold_label=threshold,
+            source=source,
+            reason="missing_overview_data",
+            action="请先导入 IBKR Flex XML 后再查看风险指标。",
+            progress_limit=limit,
+        )
+        for key, label, threshold, source, limit in [
+            ("net_exposure", "净敞口率", "≤100%", "ibkr_account_snapshots_v1", 100),
+            ("margin_usage", "Margin 使用率", "≤20% 安全 / ≤30% 警戒", "ibkr_account_snapshots_v1", 30),
+            ("largest_holding", "最大单仓", "≤15% 安全 / ≤25% 关注", "ibkr_position_snapshots_v1", 25),
+            ("top3_concentration", "前三仓合计", "≤40% 安全 / ≤60% 关注", "ibkr_position_snapshots_v1", 60),
+            ("downside_breadth", "今日下跌广度", "≤40%", "ibkr_position_snapshots_v1", 40),
+        ]
+    ]
+    return {
+        "status": "missing_data",
+        "highest_severity": "watch",
+        "highest_severity_label": _SEVERITY_LABELS["watch"],
+        "updated_at": updated_at,
+        "metrics": metrics,
+    }
+
+
+def _build_risk_dashboard(
+    *,
+    equity: float,
+    cash: float,
+    market_value: float,
+    positions: list[dict],
+    all_positions: list[dict],
+    report_date: str,
+    updated_at: str | None,
+) -> dict:
+    if equity <= 0 and not positions:
+        return _missing_risk_dashboard(updated_at)
+
+    total_holding_value = sum(abs(_position_market_value(position)) for position in positions)
+    if total_holding_value <= 1e-9:
+        total_holding_value = abs(market_value)
+    sorted_values = sorted(
+        [abs(_position_market_value(position)) for position in positions if abs(_position_market_value(position)) > 1e-9],
+        reverse=True,
+    )
+    net_exposure = (abs(market_value) / equity * 100) if equity > 0 else None
+    borrowed_amount = max(-cash, abs(market_value) - equity, 0.0)
+    margin_usage = (borrowed_amount / equity * 100) if equity > 0 else None
+    largest_holding = (sorted_values[0] / total_holding_value * 100) if total_holding_value > 0 and sorted_values else None
+    top3 = (sum(sorted_values[:3]) / total_holding_value * 100) if total_holding_value > 0 and sorted_values else None
+    downside_breadth, downside_reason = _downside_breadth_pct(positions, all_positions, report_date)
+
+    metrics = [
+        _risk_metric(
+            key="net_exposure",
+            label="净敞口率",
+            value=net_exposure,
+            severity=_severity_for_net_exposure(net_exposure),
+            threshold_label="≤100%",
+            source="ibkr_account_snapshots_v1",
+            reason="stock_market_value_divided_by_total_equity",
+            action=(
+                "已启用 Margin，检查借入额度与可用缓冲。"
+                if net_exposure is not None and net_exposure > 100
+                else "净敞口未超过净资产，维持常规监控。"
+            ),
+            progress_limit=120,
+        ),
+        _risk_metric(
+            key="margin_usage",
+            label="Margin 使用率",
+            value=margin_usage,
+            severity=_severity_for_margin_usage(margin_usage),
+            threshold_label="≤20% 安全 / ≤30% 警戒",
+            source="ibkr_account_snapshots_v1",
+            reason="max_negative_cash_or_exposure_above_equity_divided_by_equity",
+            action=(
+                "Margin 使用率偏高，优先保留可用现金缓冲。"
+                if margin_usage is not None and margin_usage > 20
+                else "当前 Margin 使用率较低，持续监控即可。"
+            ),
+            progress_limit=30,
+        ),
+        _risk_metric(
+            key="largest_holding",
+            label="最大单仓",
+            value=largest_holding,
+            severity=_severity_for_largest_holding(largest_holding),
+            threshold_label="≤15% 安全 / ≤25% 关注",
+            source="ibkr_position_snapshots_v1",
+            reason="largest_abs_position_market_value_divided_by_total_positions",
+            action=(
+                "最大单仓超过安全线，跟踪该仓是否持续扩大。"
+                if largest_holding is not None and largest_holding > 15
+                else "单仓集中度处于安全线内。"
+            ),
+            progress_limit=25,
+        ),
+        _risk_metric(
+            key="top3_concentration",
+            label="前三仓合计",
+            value=top3,
+            severity=_severity_for_top3(top3),
+            threshold_label="≤40% 安全 / ≤60% 警戒",
+            source="ibkr_position_snapshots_v1",
+            reason="largest_three_abs_positions_divided_by_total_positions",
+            action=(
+                "前三仓集中度较高，避免新增同主题敞口。"
+                if top3 is not None and top3 > 40
+                else "前三仓集中度未触发关注线。"
+            ),
+            progress_limit=60,
+        ),
+        _risk_metric(
+            key="downside_breadth",
+            label="今日下跌广度",
+            value=downside_breadth,
+            severity=_severity_for_downside_breadth(downside_breadth),
+            threshold_label="≤40%",
+            source="ibkr_position_snapshots_v1",
+            reason=downside_reason,
+            action=(
+                "多数持仓同步下跌，优先区分市场拖累和个股风险。"
+                if downside_breadth is not None and downside_breadth > 40
+                else "下跌广度未触发预警线。"
+            ),
+            progress_limit=40,
+        ),
+    ]
+    ready_count = sum(1 for metric in metrics if metric["status"] == "ready")
+    highest = max(metrics, key=lambda item: _SEVERITY_ORDER.get(str(item.get("severity")), 0))["severity"]
+    return {
+        "status": "ready" if ready_count == len(metrics) else "partial" if ready_count else "missing_data",
+        "highest_severity": highest,
+        "highest_severity_label": _SEVERITY_LABELS.get(str(highest), str(highest)),
+        "updated_at": updated_at,
+        "metrics": metrics,
+    }
 
 
 def _compute_ytd_cashflow_metrics(
@@ -510,6 +1002,103 @@ def _cashflow_events_from_map(cashflow_by_date: dict[str, float]) -> list[dict]:
     return events
 
 
+def _build_asset_metric_rows(
+    *,
+    current: dict[str, float],
+    previous: dict[str, float | None],
+    display_currency: str,
+) -> list[dict]:
+    rows = [
+        ("账户净值", "equity", current["equity"]),
+        ("股票市值", "market_value", current["market_value"]),
+        ("未实现盈亏", "unrealized_pnl", current["unrealized_pnl"]),
+        ("已实现盈亏", "realized_pnl", current["realized_pnl"]),
+        ("可用现金", "cash", current["cash"]),
+    ]
+    result: list[dict] = []
+    for label, key, value in rows:
+        previous_value = previous.get(key)
+        change = None if previous_value is None else value - previous_value
+        change_rate = None
+        if previous_value is not None and abs(previous_value) > 1e-12:
+            change_rate = change / abs(previous_value)
+        result.append(
+            {
+                "label": label,
+                "key": key,
+                "currency": display_currency,
+                "today": round(value, 2),
+                "previous": round(previous_value, 2) if previous_value is not None else None,
+                "change": round(change, 2) if change is not None else None,
+                "change_rate": change_rate,
+            }
+        )
+    return result
+
+
+def _build_recent_trades(raw_repository: RawRepository, account_id: str, *, limit: int = 5) -> list[dict]:
+    if not account_id:
+        return []
+    rows = raw_repository.es.search(
+        index="ibkr_trade_records_v1",
+        size=2000,
+        term_filters={"account_id": account_id},
+    )
+    result: list[dict] = []
+    for row in rows:
+        quantity = _to_float(row.get("quantity"))
+        price = _to_float(row.get("trade_price"))
+        side = str(row.get("side", row.get("buySell", "")) or "").upper()
+        notional_abs = abs(quantity * price)
+        notional_signed = -notional_abs if side == "BUY" else notional_abs if side == "SELL" else quantity * price
+        result.append(
+            {
+                "trade_id": row.get("trade_id", row.get("tradeID", row.get("id"))),
+                "trade_date": row.get("trade_date"),
+                "trade_date_iso": normalize_date_to_iso(row.get("trade_date")),
+                "symbol": row.get("symbol"),
+                "side": side,
+                "quantity": quantity,
+                "trade_price": price,
+                "notional_signed": round(notional_signed, 2),
+                "currency": row.get("currency", "USD"),
+            }
+        )
+    result.sort(
+        key=lambda item: (
+            str(item.get("trade_date_iso", "") or ""),
+            str(item.get("trade_id", "") or ""),
+        ),
+        reverse=True,
+    )
+    return result[:limit]
+
+
+def _compute_unrealized_pnl_for_report_date(
+    *,
+    raw_repository: RawRepository,
+    account_id: str,
+    report_date: str,
+) -> float | None:
+    if not account_id or not report_date:
+        return None
+    positions = raw_repository.es.search(
+        index="ibkr_position_snapshots_v1",
+        size=10000,
+        term_filters={"account_id": account_id, "report_date": report_date},
+    )
+    if not positions:
+        return None
+    total = 0.0
+    matched = False
+    for position in positions:
+        if position.get("level_of_detail") not in {"SUMMARY", None, ""}:
+            continue
+        total += _to_float(position.get("unrealized_pnl_snapshot", position.get("fifo_pnl_unrealized", 0)))
+        matched = True
+    return round(total, 2) if matched else None
+
+
 def _build_benchmark_series(*, start_date_iso: str | None, end_date_iso: str | None) -> list[dict]:
     if not start_date_iso or not end_date_iso or _benchmark_history_fetcher is None:
         return _benchmark_placeholders()
@@ -541,6 +1130,401 @@ def _build_benchmark_series(*, start_date_iso: str | None, end_date_iso: str | N
 
     with ThreadPoolExecutor(max_workers=len(_BENCHMARKS)) as executor:
         return list(executor.map(load_benchmark, _BENCHMARKS))
+
+
+def _normalize_beta_window(value: int | str | None) -> int:
+    try:
+        parsed = int(value or 60)
+    except (TypeError, ValueError):
+        return 60
+    return parsed if parsed in _BETA_WINDOWS else 60
+
+
+def _normalize_risk_benchmark(value: str | None) -> str:
+    keys = {benchmark["key"] for benchmark in _RISK_BENCHMARKS}
+    text = str(value or "qqq").strip().lower()
+    return text if text in keys else "qqq"
+
+
+def _normalize_drawdown_pct(value: float | str | None) -> float:
+    try:
+        parsed = float(value if value is not None else -10.0)
+    except (TypeError, ValueError):
+        parsed = -10.0
+    parsed = -abs(parsed)
+    return round(max(-30.0, min(-1.0, parsed)) * 2) / 2
+
+
+def _parse_iso_date(value: object) -> date | None:
+    normalized = normalize_date_to_iso(value)
+    if not normalized:
+        return None
+    try:
+        return date.fromisoformat(str(normalized))
+    except ValueError:
+        return None
+
+
+def _load_latest_position_rows(raw_repository: RawRepository, account_id: str, report_date: str) -> tuple[list[dict], list[dict]]:
+    all_positions = raw_repository.es.search(
+        index="ibkr_position_snapshots_v1",
+        size=10000,
+        term_filters={"account_id": account_id} if account_id else None,
+    )
+    positions = [p for p in all_positions if str(p.get("report_date", "")) == str(report_date)]
+    if not positions and report_date:
+        older_dates = sorted(
+            {
+                str(p.get("report_date", ""))
+                for p in all_positions
+                if p.get("report_date") and str(p.get("report_date", "")) <= str(report_date)
+            }
+        )
+        if older_dates:
+            fallback_date = older_dates[-1]
+            positions = [p for p in all_positions if str(p.get("report_date", "")) == fallback_date]
+    latest_positions = [
+        p for p in positions
+        if str(p.get("level_of_detail", "") or "").upper() == "SUMMARY"
+    ]
+    if latest_positions:
+        return latest_positions, all_positions
+
+    lot_positions = [
+        p for p in positions
+        if str(p.get("level_of_detail", "") or "").upper() == "LOT" or not p.get("level_of_detail")
+    ]
+    aggregated: dict[str, dict] = {}
+    for position in lot_positions:
+        symbol = str(position.get("symbol", "") or "").upper()
+        if not symbol:
+            continue
+        bucket = aggregated.setdefault(
+            symbol,
+            {
+                "symbol": symbol,
+                "report_date": position.get("report_date"),
+                "level_of_detail": "SUMMARY",
+                "quantity": 0.0,
+                "market_value_snapshot": 0.0,
+                "unrealized_pnl_snapshot": 0.0,
+            },
+        )
+        bucket["quantity"] += _position_quantity(position)
+        bucket["market_value_snapshot"] += _position_market_value(position)
+        bucket["unrealized_pnl_snapshot"] += _to_float(
+            position.get("unrealized_pnl_snapshot", position.get("fifo_pnl_unrealized", 0))
+        )
+    return list(aggregated.values()), all_positions
+
+
+def _history_returns(points: list[dict], *, window: int) -> dict[str, float]:
+    clean_points: list[tuple[str, float]] = []
+    for point in points:
+        point_date = normalize_date_to_iso(point.get("date"))
+        value = _to_float(point.get("value") or point.get("close"))
+        if point_date and value > 0:
+            clean_points.append((str(point_date), value))
+    clean_points.sort(key=lambda item: item[0])
+    if len(clean_points) > window + 1:
+        clean_points = clean_points[-(window + 1):]
+    returns: dict[str, float] = {}
+    for index in range(1, len(clean_points)):
+        previous = clean_points[index - 1][1]
+        current = clean_points[index][1]
+        if previous > 0:
+            returns[clean_points[index][0]] = (current / previous) - 1
+    return returns
+
+
+def _compute_beta(symbol_returns: dict[str, float], benchmark_returns: dict[str, float]) -> tuple[float | None, int, str]:
+    common_dates = sorted(set(symbol_returns) & set(benchmark_returns))
+    if len(common_dates) < 2:
+        return None, len(common_dates), "insufficient_overlapping_history"
+    xs = [benchmark_returns[date_key] for date_key in common_dates]
+    ys = [symbol_returns[date_key] for date_key in common_dates]
+    x_mean = sum(xs) / len(xs)
+    y_mean = sum(ys) / len(ys)
+    variance = sum((value - x_mean) ** 2 for value in xs)
+    if variance <= 1e-12:
+        return None, len(common_dates), "benchmark_variance_too_low"
+    covariance = sum((x - x_mean) * (y - y_mean) for x, y in zip(xs, ys))
+    return covariance / variance, len(common_dates), "ols_regression"
+
+
+def _stress_scenario(
+    *,
+    label: str,
+    drawdown_pct: float,
+    portfolio_beta: float | None,
+    total_market_value: float,
+    equity: float,
+    source: str,
+) -> dict:
+    estimated_loss = None
+    equity_loss_pct = None
+    status = "calculating" if portfolio_beta is None else "ready"
+    if portfolio_beta is not None:
+        estimated_loss = round(total_market_value * portfolio_beta * (drawdown_pct / 100), 2)
+        if equity:
+            equity_loss_pct = round(estimated_loss / equity * 100, 2)
+    risk_note = "Beta 数据不足，等待历史价格计算。"
+    if equity_loss_pct is not None:
+        if abs(equity_loss_pct) > 30:
+            risk_note = "净亏损区间，Margin 风险急升，应降低高 Beta 敞口。"
+        elif abs(equity_loss_pct) > 22:
+            risk_note = "浮盈几近归零，需启动止损预案并复核高 Beta 仓位。"
+        elif abs(equity_loss_pct) > 15:
+            risk_note = "浮盈大幅收窄，核查核心持仓逻辑是否变化。"
+        else:
+            risk_note = "浮盈缓冲相对充足，正常观察。"
+    return {
+        "label": label,
+        "drawdown_pct": drawdown_pct,
+        "portfolio_beta": round(portfolio_beta, 4) if portfolio_beta is not None else None,
+        "multiplier": round(portfolio_beta, 2) if portfolio_beta is not None else None,
+        "estimated_loss": estimated_loss,
+        "equity_loss_pct": equity_loss_pct,
+        "status": status,
+        "source": source,
+        "risk_note": risk_note,
+    }
+
+
+def _empty_risk_warning(selected_benchmark: str, window: int, custom_drawdown: float, reason: str) -> dict:
+    return {
+        "status": "missing_data",
+        "selected_benchmark": selected_benchmark,
+        "window": window,
+        "display_currency": _settings_service.get().base_currency,
+        "total_market_value": 0,
+        "equity": 0,
+        "beta_updated_at": None,
+        "benchmarks": [],
+        "positions": [],
+        "scenarios": [],
+        "custom_drawdown": _stress_scenario(
+            label="自定义压力",
+            drawdown_pct=custom_drawdown,
+            portfolio_beta=None,
+            total_market_value=0,
+            equity=0,
+            source="market_history",
+        ),
+        "var_comparison": None,
+        "sources": [],
+        "missing_reasons": [reason],
+    }
+
+
+def _fetch_risk_histories(symbols: list[str], *, start_date: str, end_date: str) -> dict[str, list[dict]]:
+    if _benchmark_history_fetcher is None:
+        return {symbol: [] for symbol in symbols}
+
+    def fetch(symbol: str) -> tuple[str, list[dict]]:
+        try:
+            return symbol, _benchmark_history_fetcher(symbol, start_date, end_date)
+        except Exception:
+            return symbol, []
+
+    worker_count = max(1, min(len(symbols), 8))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        return dict(executor.map(fetch, symbols))
+
+
+@router.get("/api/overview/risk-warning", responses=STORAGE_UNAVAILABLE_OPENAPI_RESPONSE)
+def get_overview_risk_warning(
+    benchmark: str | None = "qqq",
+    window: int = 60,
+    drawdown: float | None = -10.0,
+) -> dict:
+    selected_benchmark = _normalize_risk_benchmark(benchmark)
+    beta_window = _normalize_beta_window(window)
+    custom_drawdown = _normalize_drawdown_pct(drawdown)
+    latest_sync_at = _settings_service.get().last_successful_sync_at
+    if _raw_repository is None:
+        return _empty_risk_warning(selected_benchmark, beta_window, custom_drawdown, "storage_unavailable")
+
+    latest = _raw_repository.get_latest_account_snapshot()
+    if latest is None:
+        return _empty_risk_warning(selected_benchmark, beta_window, custom_drawdown, "missing_account_snapshot")
+
+    account_id = str(latest.get("account_id", "") or "")
+    report_date = str(latest.get("report_date", "") or "")
+    account_base_currency = _normalize_currency_code(latest.get("base_currency"), "USD")
+    display_currency = _settings_service.get().base_currency
+    current_positions, all_positions = _load_latest_position_rows(_raw_repository, account_id, report_date)
+    if not current_positions:
+        return _empty_risk_warning(selected_benchmark, beta_window, custom_drawdown, "missing_position_snapshots")
+
+    currency_conversion = _resolve_display_fx(
+        raw_repository=_raw_repository,
+        source_currency=account_base_currency,
+        display_currency=display_currency,
+        report_date=report_date,
+    )
+    fx_rate = _to_float(currency_conversion.get("rate")) or 1.0
+    position_values = [
+        {
+            "symbol": str(position.get("symbol", "") or "").upper(),
+            "market_value": abs(_convert_money(_position_market_value(position), fx_rate)),
+        }
+        for position in current_positions
+        if str(position.get("symbol", "") or "").strip()
+    ]
+    total_market_value = round(sum(item["market_value"] for item in position_values), 2)
+    if total_market_value <= 1e-9:
+        return _empty_risk_warning(selected_benchmark, beta_window, custom_drawdown, "zero_position_market_value")
+
+    equity = _convert_money(latest.get("total_equity", 0), fx_rate)
+    end_date = _parse_iso_date(report_date) or date.today()
+    start_date = end_date - timedelta(days=max(beta_window * 2 + 14, 90))
+    benchmark_symbols = [str(item["symbol"]) for item in _RISK_BENCHMARKS]
+    position_symbols = [item["symbol"] for item in position_values]
+    symbols = list(dict.fromkeys(position_symbols + benchmark_symbols))
+    histories = _fetch_risk_histories(
+        symbols,
+        start_date=start_date.isoformat(),
+        end_date=end_date.isoformat(),
+    )
+    returns_by_symbol = {
+        symbol: _history_returns(histories.get(symbol, []), window=beta_window)
+        for symbol in symbols
+    }
+    sources = sorted(
+        {
+            str(point.get("source"))
+            for points in histories.values()
+            for point in points
+            if point.get("source")
+        }
+    )
+    beta_updated_at = max(
+        (
+            str(point.get("date"))
+            for points in histories.values()
+            for point in points
+            if point.get("date")
+        ),
+        default=None,
+    )
+
+    benchmark_rows: list[dict] = []
+    position_rows_by_symbol = {
+        item["symbol"]: {
+            "symbol": item["symbol"],
+            "market_value": item["market_value"],
+            "weight_pct": round(item["market_value"] / total_market_value * 100, 2),
+            "betas": {},
+        }
+        for item in position_values
+    }
+
+    missing_reasons: set[str] = set()
+    for benchmark_item in _RISK_BENCHMARKS:
+        benchmark_key = str(benchmark_item["key"])
+        benchmark_symbol = str(benchmark_item["symbol"])
+        benchmark_returns = returns_by_symbol.get(benchmark_symbol, {})
+        weighted_beta = 0.0
+        valid_positions = 0
+        missing_positions = 0
+        for item in position_values:
+            symbol = item["symbol"]
+            beta, observations, reason = _compute_beta(
+                returns_by_symbol.get(symbol, {}),
+                benchmark_returns,
+            )
+            contribution = None
+            status = "missing_data"
+            if beta is not None:
+                valid_positions += 1
+                weight = item["market_value"] / total_market_value
+                contribution = beta * weight
+                weighted_beta += contribution
+                status = "ready"
+            else:
+                missing_positions += 1
+                missing_reasons.add(f"{symbol}:{reason}")
+            position_rows_by_symbol[symbol]["betas"][benchmark_key] = {
+                "value": round(beta, 4) if beta is not None else None,
+                "weighted_contribution": round(contribution, 4) if contribution is not None else None,
+                "observations": observations,
+                "status": status,
+                "reason": reason,
+            }
+        benchmark_rows.append(
+            {
+                "key": benchmark_key,
+                "label": benchmark_item["label"],
+                "symbol": benchmark_symbol,
+                "portfolio_beta": round(weighted_beta, 4) if valid_positions else None,
+                "status": "ready" if valid_positions and not missing_positions else "partial" if valid_positions else "missing_data",
+                "valid_positions": valid_positions,
+                "missing_positions": missing_positions,
+            }
+        )
+
+    selected = next((item for item in benchmark_rows if item["key"] == selected_benchmark), None)
+    portfolio_beta = selected.get("portfolio_beta") if selected else None
+    scenario_source = f"ols_beta_{beta_window}_day_{selected_benchmark}"
+    scenarios = [
+        _stress_scenario(
+            label=label,
+            drawdown_pct=drawdown_pct,
+            portfolio_beta=portfolio_beta,
+            total_market_value=total_market_value,
+            equity=equity,
+            source=scenario_source,
+        )
+        for label, drawdown_pct in [
+            ("轻度回调", -5.0),
+            ("中度调整", -10.0),
+            ("深度回撤", -15.0),
+            ("极端压力", -20.0),
+        ]
+    ]
+    custom_scenario = _stress_scenario(
+        label="自定义压力",
+        drawdown_pct=custom_drawdown,
+        portfolio_beta=portfolio_beta,
+        total_market_value=total_market_value,
+        equity=equity,
+        source=scenario_source,
+    )
+    daily_loss = _daily_loss_at_risk(current_positions, all_positions, report_date)
+    var_comparison = None
+    if daily_loss is not None:
+        display_loss = _convert_money(daily_loss, fx_rate)
+        var_comparison = {
+            "label": "单日 VaR 对比",
+            "drawdown_pct": None,
+            "portfolio_beta": None,
+            "multiplier": None,
+            "estimated_loss": display_loss,
+            "equity_loss_pct": round(display_loss / equity * 100, 2) if equity else None,
+            "status": "ready",
+            "source": "ibkr_position_snapshots_v1",
+            "risk_note": "基于持仓当日负向变化估算，用于和 Beta 情景横向比较。",
+        }
+
+    selected_status = str(selected.get("status") if selected else "missing_data")
+    response_status = "ready" if selected_status == "ready" else "partial" if portfolio_beta is not None else "missing_data"
+    return {
+        "status": response_status,
+        "selected_benchmark": selected_benchmark,
+        "window": beta_window,
+        "display_currency": display_currency,
+        "total_market_value": total_market_value,
+        "equity": equity,
+        "beta_updated_at": beta_updated_at or latest_sync_at,
+        "benchmarks": benchmark_rows,
+        "positions": list(position_rows_by_symbol.values()),
+        "scenarios": scenarios,
+        "custom_drawdown": custom_scenario,
+        "var_comparison": var_comparison,
+        "sources": sources,
+        "missing_reasons": sorted(missing_reasons),
+    }
 
 
 @router.get("/api/overview/benchmarks", responses=STORAGE_UNAVAILABLE_OPENAPI_RESPONSE)
@@ -582,6 +1566,7 @@ def get_overview() -> dict:
     daily_change = 0.0
     daily_return = None
     previous_equity = None
+    previous_snapshot = None
 
     snapshots = _raw_repository.es.search(
         index="ibkr_account_snapshots_v1",
@@ -591,7 +1576,8 @@ def get_overview() -> dict:
         term_filters={"account_id": account_id} if account_id else None,
     )
     if len(snapshots) >= 2:
-        previous_equity = float(snapshots[1].get("total_equity", 0) or 0)
+        previous_snapshot = snapshots[1]
+        previous_equity = float(previous_snapshot.get("total_equity", 0) or 0)
         daily_change = equity - previous_equity
 
     if _derived_repository is not None and account_id and report_date:
@@ -685,6 +1671,7 @@ def get_overview() -> dict:
     total_pnl = round(realized_pnl + unrealized_pnl, 2)
 
     enriched_positions: list[dict] = []
+    risk_positions: list[dict] = []
     quote_cache: dict[str, tuple[float, bool, str, str | None]] = {}
     any_realtime_quote = False
     quote_as_of_values: list[str] = []
@@ -721,6 +1708,14 @@ def get_overview() -> dict:
             position_unrealized = float(
                 position.get("unrealized_pnl_snapshot", position.get("fifo_pnl_unrealized", 0)) or 0
             )
+        risk_positions.append(
+            {
+                **position,
+                "symbol": symbol,
+                "market_value": value,
+                "unrealized_pnl": position_unrealized,
+            }
+        )
         enriched_positions.append(
             {
                 "symbol": symbol,
@@ -756,6 +1751,11 @@ def get_overview() -> dict:
         reverse=True,
     )
     top_holdings = enriched_positions[:5]
+    all_position_rows = _raw_repository.es.search(
+        index="ibkr_position_snapshots_v1",
+        size=10000,
+        term_filters={"account_id": account_id} if account_id else None,
+    )
     curve_source = _raw_repository.es.search(
         index="ibkr_account_snapshots_v1",
         size=2000,
@@ -987,6 +1987,73 @@ def get_overview() -> dict:
         if valuation_as_of_local
         else normalize_date_to_iso(report_date)
     )
+    display_equity = _convert_money(equity, fx_rate)
+    display_cash = _convert_money(cash, fx_rate)
+    display_market_value = _convert_money(market_value, fx_rate)
+    display_daily_change = _convert_money(daily_change, fx_rate)
+    last_successful_sync_at_local = normalize_datetime_to_local_iso(
+        latest_sync_at,
+        timezone_name=timezone_name,
+    )
+    risk_dashboard = _build_risk_dashboard(
+        equity=equity,
+        cash=cash,
+        market_value=market_value,
+        positions=risk_positions or latest_positions,
+        all_positions=all_position_rows,
+        report_date=str(report_date),
+        updated_at=valuation_as_of_local or last_successful_sync_at_local or report_date_iso,
+    )
+    ui_summary = _build_ui_summary(
+        report_date_iso=report_date_iso,
+        valuation_mode=valuation_mode,
+        valuation_as_of=valuation_as_of,
+        valuation_as_of_local=valuation_as_of_local,
+        last_successful_sync_at=latest_sync_at,
+        last_successful_sync_at_local=last_successful_sync_at_local,
+        positions_count=positions_count,
+        top_holdings=display_top_holdings,
+        market_value=display_market_value,
+        benchmark_series=benchmark_series,
+    )
+    previous_report_date = str(previous_snapshot.get("report_date", "") or "") if previous_snapshot else ""
+    previous_unrealized_pnl = (
+        _to_float(previous_snapshot.get("unrealized_pnl"))
+        if previous_snapshot and previous_snapshot.get("unrealized_pnl") is not None
+        else _compute_unrealized_pnl_for_report_date(
+            raw_repository=_raw_repository,
+            account_id=str(account_id),
+            report_date=previous_report_date,
+        )
+    )
+    previous_realized_pnl = (
+        _to_float(previous_snapshot.get("realized_pnl"))
+        if previous_snapshot and previous_snapshot.get("realized_pnl") is not None
+        else _compute_realized_pnl_until_report_date(
+            raw_repository=_raw_repository,
+            account_id=str(account_id),
+            report_date=previous_report_date,
+            display_currency=account_base_currency,
+        )
+    )
+    asset_metric_rows = _build_asset_metric_rows(
+        current={
+            "equity": display_equity,
+            "market_value": display_market_value,
+            "unrealized_pnl": _convert_money(unrealized_pnl, fx_rate),
+            "realized_pnl": _convert_money(realized_pnl, fx_rate),
+            "cash": display_cash,
+        },
+        previous={
+            "equity": _convert_money(previous_snapshot.get("total_equity"), fx_rate) if previous_snapshot else None,
+            "market_value": _convert_money(previous_snapshot.get("stock_market_value"), fx_rate) if previous_snapshot else None,
+            "unrealized_pnl": _convert_money(previous_unrealized_pnl, fx_rate) if previous_unrealized_pnl is not None else None,
+            "realized_pnl": _convert_money(previous_realized_pnl, fx_rate) if previous_realized_pnl is not None else None,
+            "cash": _convert_money(previous_snapshot.get("cash"), fx_rate) if previous_snapshot else None,
+        },
+        display_currency=display_currency,
+    )
+    recent_trades = _build_recent_trades(_raw_repository, str(account_id), limit=5)
 
     return {
         "report_date": report_date,
@@ -994,9 +2061,9 @@ def get_overview() -> dict:
         "valuation_as_of": valuation_as_of,
         "valuation_as_of_local": valuation_as_of_local,
         "valuation_date_iso": valuation_date_iso,
-        "equity": _convert_money(equity, fx_rate),
-        "cash": _convert_money(cash, fx_rate),
-        "market_value": _convert_money(market_value, fx_rate),
+        "equity": display_equity,
+        "cash": display_cash,
+        "market_value": display_market_value,
         "account_base_currency": account_base_currency,
         "display_currency": display_currency,
         "currency_conversion": {
@@ -1010,7 +2077,7 @@ def get_overview() -> dict:
             "market_value": _convert_money(snapshot_positions_market_value, fx_rate),
         },
         "valuation_mode": valuation_mode,
-        "daily_change": _convert_money(daily_change, fx_rate),
+        "daily_change": display_daily_change,
         "daily_return": daily_return,
         "realized_pnl": _convert_money(realized_pnl, fx_rate),
         "unrealized_pnl": _convert_money(unrealized_pnl, fx_rate),
@@ -1029,6 +2096,19 @@ def get_overview() -> dict:
         "equity_curve": display_equity_curve,
         "asset_flow_events": display_asset_flow_events,
         "benchmark_series": benchmark_series,
+        "asset_metric_rows": asset_metric_rows,
+        "recent_trades": recent_trades,
+        "ai_summary": {
+            "status": "pending",
+            "title": "AI Summary",
+            "headline": "AI 摘要待接入",
+            "bullets": [
+                "当前阶段先展示本地可追溯的资产、持仓和同步状态。",
+                "接入持仓分析后，这里将复用真实 AI provider 输出，不在总览页编造判断。",
+            ],
+            "updated_at": None,
+        },
+        "risk_dashboard": risk_dashboard,
         "net_value_curve": {
             "rows": display_equity_curve,
             "cash_flow_events": display_asset_flow_events,
@@ -1040,12 +2120,10 @@ def get_overview() -> dict:
             "rows": display_total_asset_rows,
             "cash_flow_events": display_ytd_flow_events,
             "range": "ytd",
-            "asset_net_value": _convert_money(equity, fx_rate),
-            "daily_change": _convert_money(daily_change, fx_rate),
+            "asset_net_value": display_equity,
+            "daily_change": display_daily_change,
         },
         "last_successful_sync_at": latest_sync_at,
-        "last_successful_sync_at_local": normalize_datetime_to_local_iso(
-            latest_sync_at,
-            timezone_name=timezone_name,
-        ),
+        "last_successful_sync_at_local": last_successful_sync_at_local,
+        "ui_summary": ui_summary,
     }

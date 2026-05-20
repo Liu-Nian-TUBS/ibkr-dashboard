@@ -59,14 +59,18 @@ export function MetricCard({
   value,
   hint,
   tone = "neutral",
+  variant = "default",
+  className = "",
 }: {
   label: string;
   value: ReactNode;
   hint?: ReactNode;
   tone?: "neutral" | "positive" | "negative" | "accent";
+  variant?: "default" | "primary" | "compact";
+  className?: string;
 }) {
   return (
-    <div className={`metric-card metric-card--${tone}`}>
+    <div className={`metric-card metric-card--${tone} metric-card--${variant} ${className}`.trim()}>
       <span>{label}</span>
       <strong>{value}</strong>
       {hint ? <small>{hint}</small> : null}
@@ -74,8 +78,16 @@ export function MetricCard({
   );
 }
 
-export function StatusPill({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "positive" | "negative" | "accent" }) {
-  return <span className={`status-pill status-pill--${tone}`}>{children}</span>;
+export function StatusPill({
+  children,
+  tone = "neutral",
+  className = "",
+}: {
+  children: ReactNode;
+  tone?: "neutral" | "positive" | "negative" | "accent";
+  className?: string;
+}) {
+  return <span className={`status-pill status-pill--${tone} ${className}`.trim()}>{children}</span>;
 }
 
 export function EmptyState({

@@ -14,16 +14,16 @@ const PortfolioAnalysisPage = lazy(() =>
 );
 
 const NAV_ITEMS: NavItem[] = [
-  { key: "overview", label: "资产总览", detail: "净值 / 收益 / 同步" },
-  { key: "positions", label: "持仓明细", detail: "仓位 / 行业 / 个股" },
-  { key: "performance", label: "业绩分析", detail: "榜单 / 日历 / 月度" },
-  { key: "trades", label: "交易明细", detail: "交易 / 出入金" },
-  { key: "portfolioAnalysis", label: "持仓分析", detail: "市场 / 持仓 / 个股" },
-  { key: "settings", label: "设置与导入", detail: "XML / 同步 / 数据源" },
+  { key: "overview", label: "资产总览", detail: "净值 / 曲线 / 状态", icon: "▦" },
+  { key: "positions", label: "持仓明细", detail: "仓位 / 行业 / 成本", icon: "▤" },
+  { key: "performance", label: "业绩分析", detail: "收益 / 日历 / 归因", icon: "⌁" },
+  { key: "trades", label: "交易明细", detail: "交易 / 现金 / 审计", icon: "☷" },
+  { key: "portfolioAnalysis", label: "持仓分析", detail: "市场 / 风险 / 个股", icon: "◔" },
+  { key: "settings", label: "设置与导入", detail: "凭据 / XML / 集成", icon: "⇧" },
 ];
 
-const PAGE_RENDERERS: Record<PageKey, () => JSX.Element> = {
-  overview: () => <OverviewPage />,
+const PAGE_RENDERERS: Record<PageKey, (navigate: (page: PageKey) => void) => JSX.Element> = {
+  overview: (navigate) => <OverviewPage onNavigate={navigate} />,
   positions: () => <PositionsPage />,
   performance: () => <PerformancePage />,
   trades: () => <TradesPage />,
@@ -37,11 +37,12 @@ const PAGE_RENDERERS: Record<PageKey, () => JSX.Element> = {
 
 function App() {
   const [activePage, setActivePage] = useState<PageKey>("overview");
+  const [sidebarVisible, setSidebarVisible] = useState(true);
   const activeItem = useMemo(() => NAV_ITEMS.find((item) => item.key === activePage) ?? NAV_ITEMS[0], [activePage]);
   const renderPage = PAGE_RENDERERS[activePage];
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${sidebarVisible ? "" : "app-shell--sidebar-hidden"}`.trim()}>
       <aside className="sidebar">
         <div className="brand-lockup">
           <span>IBKR</span>
@@ -55,9 +56,10 @@ function App() {
             <button
               key={item.key}
               type="button"
-              className={item.key === activePage ? "active" : ""}
-              onClick={() => setActivePage(item.key)}
-            >
+            className={item.key === activePage ? "active" : ""}
+            onClick={() => setActivePage(item.key)}
+          >
+              <span className="nav-icon" aria-hidden="true">{item.icon}</span>
               <strong>{item.label}</strong>
               <span>{item.detail}</span>
             </button>
@@ -68,13 +70,29 @@ function App() {
 
       <main className="main-stage">
         <div className="top-strip">
-          <div>
-            <span>当前页面</span>
-            <strong>{activeItem.label}</strong>
+          <div className="top-strip__title">
+            <button
+              type="button"
+              className="top-strip__menu"
+              aria-label={sidebarVisible ? "隐藏侧边栏" : "显示侧边栏"}
+              aria-expanded={sidebarVisible}
+              onClick={() => setSidebarVisible((visible) => !visible)}
+            >
+              ☰
+            </button>
+            <div>
+              <strong>{activePage === "overview" ? "本地投资控制台" : activeItem.label}</strong>
+              <span>{activePage === "overview" ? "基于 IBKR Flex 与本地数据源的投资组合分析与风险监控" : activeItem.detail}</span>
+            </div>
+          </div>
+          <div className="top-strip__meta">
+            <span><i />Flex 已配置</span>
+            <span><i />AI 已配置</span>
+            <span>数据 本地</span>
           </div>
         </div>
         <AppErrorBoundary resetKey={activePage}>
-          {renderPage()}
+          {renderPage(setActivePage)}
         </AppErrorBoundary>
       </main>
     </div>

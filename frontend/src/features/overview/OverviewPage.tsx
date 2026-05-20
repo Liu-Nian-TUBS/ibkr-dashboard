@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { MouseEvent, ReactNode } from "react";
 import { api } from "../../lib/api";
-import type { ApiRecord, PageState } from "../../lib/contracts";
-import { asArray, asNumber, asRecord, asText, clamp, deltaClass, formatCurrency, formatDate, formatDateTimeMinute, formatPercent } from "../../lib/format";
-import { DataState, MetricCard, PageHeader, StatusPill, Surface } from "../../components/Primitives";
+import type { ApiRecord, OverviewResponse, PageKey, PageState } from "../../lib/contracts";
+import { asArray, asNumber, asRecord, asText, clamp, deltaClass, formatCurrency, formatDate, formatDateTimeMinute, formatNumber, formatPercent } from "../../lib/format";
+import { DataState, DataTable, MetricCard, Surface } from "../../components/Primitives";
+import { OverviewRiskWarning } from "./OverviewRiskWarning";
 
 type ReturnMethod = "simple" | "twr" | "cash";
 type RangeKey = "1w" | "mtd" | "1m" | "3m" | "ytd" | "1y" | "all" | "custom";
@@ -69,11 +70,11 @@ interface BenchmarkLoadState {
   error: string | null;
 }
 
-let overviewPageCache: ApiRecord | null = null;
+let overviewPageCache: OverviewResponse | null = null;
 let overviewBenchmarkCache: { key: string; rows: ApiRecord[] } | null = null;
 
-export function OverviewPage() {
-  const [state, setState] = useState<PageState<ApiRecord>>({
+export function OverviewPage({ onNavigate }: { onNavigate?: (page: PageKey) => void }) {
+  const [state, setState] = useState<PageState<OverviewResponse>>({
     data: overviewPageCache,
     loading: overviewPageCache === null,
     error: null,
@@ -156,17 +157,15 @@ export function OverviewPage() {
       {(data) => (
         <OverviewContent
           data={data}
-          onRefresh={load}
           benchmarkRows={benchmarkState.rows}
-          benchmarkLoading={benchmarkState.loading}
-          benchmarkError={benchmarkState.error}
+          onNavigate={onNavigate}
         />
       )}
     </DataState>
   );
 }
 
-function resolveBenchmarkRange(data: ApiRecord | null): { key: string; startDate: string; endDate: string } | null {
+function resolveBenchmarkRange(data: OverviewResponse | null): { key: string; startDate: string; endDate: string } | null {
   if (!data) return null;
   const netValueCurve = asRecord(data.net_value_curve);
   const rows = asArray(netValueCurve.rows).length > 0 ? asArray(netValueCurve.rows) : asArray(data.equity_curve);
@@ -179,29 +178,25 @@ function resolveBenchmarkRange(data: ApiRecord | null): { key: string; startDate
 
 function OverviewContent({
   data,
-  onRefresh,
   benchmarkRows,
-  benchmarkLoading,
-  benchmarkError,
+  onNavigate,
 }: {
-  data: ApiRecord;
-  onRefresh: () => void;
+  data: OverviewResponse;
   benchmarkRows: ApiRecord[] | null;
-  benchmarkLoading: boolean;
-  benchmarkError: string | null;
+  onNavigate?: (page: PageKey) => void;
 }) {
   const [method, setMethod] = useState<ReturnMethod>("simple");
   const [range, setRange] = useState<RangeKey>("ytd");
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
   const currency = asText(data.display_currency, "USD");
-  const valuationMode = asText(data.valuation_mode, "snapshot");
-  const syncAtRaw = data.last_successful_sync_at_local ?? data.last_successful_sync_at;
-  const syncAt = syncAtRaw ? formatDateTimeMinute(syncAtRaw) : "";
+  const uiSummary = data.ui_summary;
+  const valuationMode = uiSummary?.valuation_mode ?? asText(data.valuation_mode, "snapshot");
   const valuationTime = valuationMode === "realtime"
     ? formatDateTimeMinute(data.valuation_as_of_local ?? data.valuation_as_of)
     : formatDate(data.report_date_iso ?? data.report_date);
-  const valuationHint = valuationMode === "realtime" ? `实时价格 ${valuationTime}` : `XML 快照 ${valuationTime}`;
+  const fallbackValuationHint = valuationMode === "realtime" ? `实时价格 ${valuationTime}` : `XML 快照 ${valuationTime}`;
+  const valuationHint = uiSummary?.valuation_label ?? fallbackValuationHint;
   const netValueCurve = asRecord(data.net_value_curve);
   const curveRows = useMemo(() => {
     const rows = asArray(netValueCurve.rows).length > 0 ? asArray(netValueCurve.rows) : asArray(data.equity_curve);
@@ -242,71 +237,130 @@ function OverviewContent({
   );
   const defaultCustomStart = curveRows[0]?.date ?? "";
   const defaultCustomEnd = curveRows[curveRows.length - 1]?.date ?? "";
-  const dashboardMetrics = [
-    { label: "账户净值", value: formatCurrency(data.equity, currency), tone: "accent" as const, hint: valuationHint },
-    { label: "当日盈亏", value: formatCurrency(data.daily_change, currency), tone: deltaClass(data.daily_change), hint: formatPercent(data.daily_return) },
-    { label: "现金", value: formatCurrency(data.cash, currency), tone: "neutral" as const },
-    { label: "股票市值", value: formatCurrency(data.market_value, currency), tone: "neutral" as const },
-    { label: "总盈亏", value: formatCurrency(data.total_pnl, currency), tone: deltaClass(data.total_pnl), hint: `已实现 ${formatCurrency(data.realized_pnl, currency)}` },
-    { label: "未实现盈亏", value: formatCurrency(data.unrealized_pnl, currency), tone: deltaClass(data.unrealized_pnl) },
-    { label: "年初至今 TWR", value: formatPercent(data.twr_ytd), tone: deltaClass(data.twr_ytd) },
-    { label: "年初至今 MWRR", value: formatPercent(data.mwrr_ytd), tone: deltaClass(data.mwrr_ytd) },
-    { label: "至今 MWRR", value: formatPercent(data.mwrr_all_time), tone: deltaClass(data.mwrr_all_time) },
-    { label: "年内分红", value: formatCurrency(data.dividends, currency), tone: "positive" as const },
-    { label: "年内利息", value: formatCurrency(data.interest, currency), tone: "positive" as const },
-    { label: "年内佣金", value: formatCurrency(data.commissions, currency), tone: "negative" as const },
+  const assetMetricRows = asArray(data.asset_metric_rows);
+  const recentTrades = asArray(data.recent_trades);
+  const marketRatio = asNumber(data.equity) === 0 ? null : asNumber(data.market_value) / asNumber(data.equity);
+  const updatedAt = formatDateTimeMinute(
+    uiSummary?.valuation_as_of_local
+      ?? uiSummary?.last_successful_sync_at_local
+      ?? data.valuation_as_of_local
+      ?? data.report_date_iso
+      ?? data.report_date,
+  );
+  const detailMetrics = [
+    {
+      label: "现金",
+      value: formatCurrency(data.cash, currency),
+      tone: deltaClass(data.cash),
+      hint: `可用现金 ${formatCurrency(data.cash, currency)}`,
+    },
+    {
+      label: "股票市值",
+      value: formatCurrency(data.market_value, currency),
+      tone: "neutral" as const,
+      hint: `持仓占比 ${marketRatio === null ? "-" : formatPercent(marketRatio)}`,
+    },
+    {
+      label: "年初至今 TWR",
+      value: formatPercent(data.twr_ytd),
+      tone: deltaClass(data.twr_ytd),
+      hint: `年化收益率 ${formatPercent(data.ytd_simple_weighted)}`,
+    },
+    {
+      label: "年初至今 MWRR",
+      value: formatPercent(data.mwrr_ytd),
+      tone: deltaClass(data.mwrr_ytd),
+      hint: `至今 MWRR ${formatPercent(data.mwrr_all_time)}`,
+    },
+    {
+      label: "总盈亏",
+      value: formatCurrency(data.total_pnl, currency),
+      tone: deltaClass(data.total_pnl),
+      hint: `已实现 ${formatCurrency(data.realized_pnl, currency)}`,
+    },
+    {
+      label: "年内分红",
+      value: formatCurrency(data.dividends, currency),
+      tone: deltaClass(data.dividends),
+      hint: "现金收益",
+    },
+    {
+      label: "年内利息",
+      value: formatCurrency(data.interest, currency),
+      tone: deltaClass(data.interest),
+      hint: "现金收益",
+    },
+    {
+      label: "年内佣金",
+      value: formatCurrency(data.commissions, currency),
+      tone: "negative" as const,
+      hint: "交易成本",
+    },
   ];
-
   return (
-    <>
-      <PageHeader
-        eyebrow="资产总览"
-        title="账户净值与资金曲线"
-        description="净值、收益和资金流统一按设置币种展示。"
-        meta={
-          <>
-            <StatusPill tone={valuationMode === "realtime" ? "positive" : "neutral"}>
-              {valuationMode === "realtime" ? "实时估值" : "快照估值"}
-            </StatusPill>
-            {syncAt ? <StatusPill tone="neutral">同步 {syncAt}</StatusPill> : null}
-            <button type="button" onClick={onRefresh}>刷新</button>
-          </>
-        }
-      />
-
-      <div className="metric-grid">
-        {dashboardMetrics.map((metric) => (
-          <MetricCard key={metric.label} {...metric} />
-        ))}
-      </div>
-
-      <Surface
-        title="净值曲线"
-        action={
-          <div className="surface-action-group">
-            <StatusPill tone="accent">{selectedRange.points.length} 个快照</StatusPill>
-            {benchmarkLoading ? <StatusPill tone="neutral">参考曲线加载中</StatusPill> : null}
-            {!benchmarkLoading && benchmarkError ? <StatusPill tone="negative">参考曲线待重试</StatusPill> : null}
-            {!benchmarkLoading && !benchmarkError && benchmarkReturnSeries.length > 0 ? (
-              <StatusPill tone="positive">参考曲线已缓存</StatusPill>
-            ) : null}
-          </div>
-        }
-        className="overview-surface"
-      >
-        <div className="overview-control-bar">
-          <SegmentedControl
-            label="计算方式"
-            options={METHOD_OPTIONS}
-            value={method}
-            onChange={setMethod}
+    <div className="overview-dashboard">
+      <section className="overview-kpi-board" aria-label="账户概要">
+        <MetricCard
+          label={`账户净值（${currency}）`}
+          value={formatCurrency(data.equity, currency)}
+          tone="accent"
+          className="overview-kpi-card--wide"
+          hint={
+            <span className="overview-net-change">
+              <b className={`delta-text delta-text--${deltaClass(data.daily_change)}`}>
+                当日盈亏 {formatCurrency(data.daily_change, currency)}（{formatPercent(data.daily_return)}）
+              </b>
+              <small>更新：{updatedAt}</small>
+            </span>
+          }
+        />
+        <div className="overview-kpi-matrix">
+          {detailMetrics.map((metric) => (
+          <MetricCard
+            key={metric.label}
+            label={metric.label}
+            value={metric.value}
+            hint={metric.hint}
+            tone={metric.tone}
+            variant="compact"
           />
-          <SegmentedControl
-            label="时间范围"
-            options={RANGE_OPTIONS}
-            value={range}
-            onChange={setRange}
-          />
+          ))}
+        </div>
+      </section>
+
+      <section className="overview-main-grid">
+        <Surface
+          title={`账户净值走势（${currency}）`}
+          action={
+            <div className="surface-action-group">
+              <SegmentedControl
+                label="指标"
+                options={[
+                  { key: "simple" as const, label: "简单加权" },
+                  { key: "twr" as const, label: "时间加权" },
+                  { key: "cash" as const, label: "现金加权" },
+                ]}
+                value={method}
+                onChange={setMethod}
+              />
+              <SegmentedControl
+                label="区间"
+                options={[
+                  { key: "1w" as const, label: "1W" },
+                  { key: "1m" as const, label: "1M" },
+                  { key: "3m" as const, label: "3M" },
+                  { key: "6m" as RangeKey, label: "6M" },
+                  { key: "ytd" as const, label: "YTD" },
+                  { key: "1y" as const, label: "1Y" },
+                  { key: "all" as const, label: "All" },
+                ].filter((item) => RANGE_OPTIONS.some((option) => option.key === item.key))}
+                value={range}
+                onChange={setRange}
+              />
+            </div>
+          }
+          className="overview-surface overview-chart-panel"
+        >
           {range === "custom" ? (
             <div className="date-range-inline">
               <label>
@@ -329,46 +383,79 @@ function OverviewContent({
               </label>
             </div>
           ) : null}
-        </div>
 
-        <TrendChart
-          currency={currency}
-          emptyTitle="净值快照不足"
-          emptyDetail="导入更多账户快照后显示净值曲线。"
-          series={[
-            portfolioReturnSeries,
-            ...benchmarkReturnSeries,
-          ]}
-          events={selectedFlows}
-          summary={
-            <div className="chart-kpi-pair">
-              <ChartKpi
-                label="累计收益"
-                value={formatCurrency(returnSummary.amount, currency)}
-                tone={deltaClass(returnSummary.amount ?? 0)}
-              />
-              <ChartKpi
-                label="收益率"
-                value={formatPercent(returnSummary.rate)}
-                tone={deltaClass(returnSummary.rate ?? 0)}
-              />
-            </div>
-          }
-        />
+          <TrendChart
+            currency={currency}
+            emptyTitle="净值快照不足"
+            emptyDetail="导入更多账户快照后显示净值曲线。"
+            series={[
+              portfolioReturnSeries,
+              ...benchmarkReturnSeries,
+            ]}
+            events={selectedFlows}
+            summary={
+              <div className="chart-kpi-pair">
+                <ChartKpi
+                  label="累计收益"
+                  value={formatCurrency(returnSummary.amount, currency)}
+                  tone={deltaClass(returnSummary.amount ?? 0)}
+                />
+                <ChartKpi
+                  label="收益率"
+                  value={formatPercent(returnSummary.rate)}
+                  tone={deltaClass(returnSummary.rate ?? 0)}
+                />
+              </div>
+            }
+          />
+        </Surface>
 
-        {selectedFlows.length > 0 ? (
-          <div className="flow-event-list">
-            {selectedFlows.slice(0, 8).map((event) => (
-              <span key={`${event.date}-${event.amount}`} className={`flow-event flow-event--${event.flowType}`}>
-                <strong>{event.label}</strong>
-                <em>{formatDate(event.date)}</em>
-                <b>{formatCurrency(event.amount, currency)}</b>
-              </span>
-            ))}
+        <OverviewRiskWarning data={data} currency={currency} section="dashboard" />
+      </section>
+
+      <section className="overview-bottom-grid">
+        <Surface className="overview-table-panel">
+          <div className="overview-inline-title" title={`更新：${updatedAt}`}>
+            <h2>账户净值与资金曲线数据</h2>
+            <span className="overview-info-dot" title={`更新：${updatedAt}`}>!</span>
           </div>
-        ) : null}
-      </Surface>
-    </>
+          <DataTable
+            rows={assetMetricRows}
+            empty="暂无资金曲线数据"
+            columns={[
+              { key: "label", label: "指标" },
+              { key: "today", label: "今日", align: "right", render: (row) => formatCurrency(row.today, asText(row.currency, currency)) },
+              { key: "previous", label: "昨日", align: "right", render: (row) => row.previous === null || row.previous === undefined ? "-" : formatCurrency(row.previous, asText(row.currency, currency)) },
+              { key: "change", label: "变化", align: "right", render: (row) => <span className={`delta-text delta-text--${deltaClass(row.change)}`}>{row.change === null || row.change === undefined ? "-" : formatCurrency(row.change, asText(row.currency, currency))}</span> },
+              { key: "change_rate", label: "变化率", align: "right", render: (row) => <span className={`delta-text delta-text--${deltaClass(row.change_rate)}`}>{formatPercent(row.change_rate)}</span> },
+            ]}
+          />
+        </Surface>
+
+        <Surface className="overview-table-panel">
+          <div className="overview-inline-title">
+            <h2>最近交易</h2>
+            <span className="overview-section-caption">（近 5 笔）</span>
+          </div>
+          <DataTable
+            rows={recentTrades}
+            empty="暂无交易记录"
+            columns={[
+              { key: "trade_date", label: "时间", render: (row) => formatDateTimeMinute(row.trade_date ?? row.trade_date_iso) },
+              { key: "symbol", label: "代码" },
+              { key: "side", label: "方向", render: (row) => <span className={`trade-side trade-side--${asText(row.side, "").toLowerCase()}`}>{asText(row.side)}</span> },
+              { key: "quantity", label: "数量", align: "right", render: (row) => formatNumber(row.quantity, 0) },
+              { key: "notional_signed", label: "金额", align: "right", render: (row) => <span className={`delta-text delta-text--${deltaClass(row.notional_signed)}`}>{formatCurrency(row.notional_signed, asText(row.currency, currency))}</span> },
+            ]}
+          />
+          <button type="button" className="link-button overview-all-trades" onClick={() => onNavigate?.("trades")}>
+            全部交易
+          </button>
+        </Surface>
+
+        <OverviewRiskWarning data={data} currency={currency} section="beta" />
+      </section>
+    </div>
   );
 }
 

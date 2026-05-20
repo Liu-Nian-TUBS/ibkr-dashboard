@@ -1,6 +1,8 @@
 import type {
   ImportContentFile,
   ImportTaskResponse,
+  OverviewResponse,
+  OverviewRiskWarningResponse,
   PortfolioAnalysisResponse,
   RequestQuery,
   SettingsResponse,
@@ -63,8 +65,10 @@ export function deleteJson<T>(path: string): Promise<T> {
 }
 
 export const api = {
-  overview: () => getJson<Record<string, unknown>>("/api/overview"),
+  overview: () => getJson<OverviewResponse>("/api/overview"),
   overviewBenchmarks: (query?: RequestQuery) => getJson<Record<string, unknown>>("/api/overview/benchmarks", query),
+  overviewRiskWarning: (query?: RequestQuery) =>
+    getJson<OverviewRiskWarningResponse>("/api/overview/risk-warning", query),
   positions: (query?: RequestQuery) => getJson<Record<string, unknown>>("/api/positions", query),
   portfolioAnalysis: (query?: RequestQuery) =>
     getJson<PortfolioAnalysisResponse>("/api/portfolio-analysis", query),

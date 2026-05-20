@@ -236,6 +236,161 @@ export interface PortfolioAnalysisResponse {
   links: Record<string, string>;
 }
 
+export type OverviewStatus = "ready" | "missing_data" | "stale" | "partial";
+
+export type OverviewBenchmarkStatus = "ready" | "pending" | "unavailable";
+
+export type OverviewRiskSeverity = "healthy" | "watch" | "caution" | "alert";
+
+export type OverviewRiskMetricKey =
+  | "net_exposure"
+  | "margin_usage"
+  | "largest_holding"
+  | "top3_concentration"
+  | "downside_breadth";
+
+export type OverviewRiskBenchmarkKey = "qqq" | "nasdaq" | "sp500";
+
+export type OverviewRiskWindow = 30 | 60 | 90 | 120;
+
+export type OverviewRiskWarningStatus = "ready" | "calculating" | "partial" | "missing_data";
+
+export interface OverviewRiskMetric {
+  key: OverviewRiskMetricKey;
+  label: string;
+  value: number | null;
+  unit: "percent";
+  status: "ready" | "missing_data";
+  severity: OverviewRiskSeverity;
+  threshold_label: string;
+  progress_pct: number | null;
+  source: string;
+  reason: string;
+  action: string;
+}
+
+export interface OverviewRiskDashboard {
+  status: "ready" | "missing_data" | "partial";
+  highest_severity: OverviewRiskSeverity;
+  updated_at: string | null;
+  metrics: OverviewRiskMetric[];
+}
+
+export interface OverviewBenchmarkBeta {
+  key: OverviewRiskBenchmarkKey;
+  label: string;
+  symbol: string;
+  status: OverviewRiskWarningStatus;
+  portfolio_beta: number | null;
+  source: string;
+  reason: string | null;
+  updated_at: string | null;
+}
+
+export interface OverviewPositionBeta {
+  symbol: string;
+  name?: string | null;
+  weight_pct: number | null;
+  market_value: number | null;
+  beta: number | null;
+  benchmark_key?: OverviewRiskBenchmarkKey;
+  betas?: Partial<Record<OverviewRiskBenchmarkKey, number | null>>;
+  status: "ready" | "missing_data";
+  source: string;
+  reason: string | null;
+}
+
+export interface OverviewStressScenario {
+  key?: string;
+  label: string;
+  drawdown_pct: number;
+  portfolio_beta: number | null;
+  stress_loss: number | null;
+  projected_equity: number | null;
+  status: OverviewRiskWarningStatus;
+  source: string;
+  reason: string | null;
+}
+
+export interface OverviewRiskWarningResponse {
+  status: OverviewRiskWarningStatus;
+  selected_benchmark: OverviewRiskBenchmarkKey;
+  window: OverviewRiskWindow;
+  total_market_value: number;
+  equity: number;
+  beta_updated_at: string | null;
+  benchmarks: OverviewBenchmarkBeta[];
+  positions: OverviewPositionBeta[];
+  scenarios: OverviewStressScenario[];
+  custom_drawdown: OverviewStressScenario;
+  var_comparison: OverviewStressScenario | null;
+  sources: string[];
+  missing_reasons: string[];
+}
+
+export interface OverviewConcentrationPreview {
+  status: "ready" | "missing_data";
+  positions_count: number;
+  top_holding_symbol: string | null;
+  top_holding_weight_pct: number | null;
+  top5_weight_pct: number | null;
+  label: string;
+}
+
+export interface OverviewUiSummary {
+  status: OverviewStatus;
+  status_label: string;
+  valuation_mode: "snapshot" | "realtime";
+  valuation_label: string;
+  valuation_as_of: string | null;
+  valuation_as_of_local: string | null;
+  report_date_iso: string | null;
+  last_successful_sync_at: string | null;
+  last_successful_sync_at_local: string | null;
+  data_source_label: string;
+  quote_source_label: string;
+  positions_count: number;
+  benchmark_status: OverviewBenchmarkStatus;
+  warnings: string[];
+  reasons: string[];
+  concentration_preview: OverviewConcentrationPreview;
+}
+
+export interface OverviewResponse extends ApiRecord {
+  report_date?: string | null;
+  report_date_iso?: string | null;
+  valuation_as_of?: string | null;
+  valuation_as_of_local?: string | null;
+  valuation_date_iso?: string | null;
+  valuation_mode?: string;
+  display_currency?: string;
+  equity?: number;
+  cash?: number;
+  market_value?: number;
+  daily_change?: number;
+  daily_return?: number | null;
+  realized_pnl?: number;
+  unrealized_pnl?: number;
+  total_pnl?: number;
+  twr_ytd?: number | null;
+  mwrr_ytd?: number | null;
+  mwrr_all_time?: number | null;
+  dividends?: number;
+  interest?: number;
+  commissions?: number;
+  positions_count?: number;
+  top_holdings?: ApiRecord[];
+  equity_curve?: ApiRecord[];
+  asset_flow_events?: ApiRecord[];
+  benchmark_series?: ApiRecord[];
+  asset_metric_rows?: ApiRecord[];
+  recent_trades?: ApiRecord[];
+  ai_summary?: ApiRecord;
+  net_value_curve?: ApiRecord;
+  ui_summary?: OverviewUiSummary;
+  risk_dashboard?: OverviewRiskDashboard;
+}
+
 export type AiProvider = "openai" | "minimax" | "mock";
 
 export type FutuConnectionMode = "disabled" | "local_opend" | "longbridge";
@@ -298,4 +453,5 @@ export interface NavItem {
   key: PageKey;
   label: string;
   detail: string;
+  icon?: string;
 }
