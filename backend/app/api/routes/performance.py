@@ -117,6 +117,11 @@ def get_performance(
         start_date=normalized_start_date,
         end_date=normalized_end_date,
     )
+    daily_trade_stats = _build_daily_trade_stats(
+        account_id=account_id,
+        start_date=normalized_start_date,
+        end_date=normalized_end_date,
+    )
     return {
         "filters": {
             "account_id": account_id,
@@ -136,6 +141,7 @@ def get_performance(
         "leaderboard": display_leaderboard,
         "pnl_calendar": pnl_calendar,
         "monthly_trade_stats": monthly_trade_stats,
+        "daily_trade_stats": daily_trade_stats,
         "pnl_leaderboard": pnl_leaderboard,
         "realized_details": realized_details,
         "total": len(filtered),
@@ -654,6 +660,45 @@ def _build_monthly_trade_stats(
     recent = rows[:12]
     recent.sort(key=lambda row: str(row["month"]))
     return recent
+
+
+def _build_daily_trade_stats(
+    *,
+    account_id: str | None,
+    start_date: str | None,
+    end_date: str | None,
+) -> list[dict]:
+    if _raw_repository is None:
+        return []
+    term_filters: dict[str, str] = {}
+    if account_id:
+        term_filters["account_id"] = account_id
+    trades = _raw_repository.es.search(
+        index="ibkr_trade_records_v1",
+        size=10000,
+        term_filters=term_filters or None,
+    )
+    daily: dict[str, dict] = {}
+    for trade in trades:
+        trade_date = _compact_date(trade.get("trade_date"))
+        if not trade_date:
+            continue
+        if start_date and trade_date < start_date:
+            continue
+        if end_date and trade_date > end_date:
+            continue
+        qty = float(trade.get("quantity", 0) or 0)
+        price = float(trade.get("trade_price", 0) or 0)
+        notional_abs = abs(qty * price)
+        bucket = daily.setdefault(
+            trade_date,
+            {"date": trade_date, "trade_count": 0, "trade_notional_abs": 0.0},
+        )
+        bucket["trade_count"] = int(bucket["trade_count"]) + 1
+        bucket["trade_notional_abs"] = float(bucket["trade_notional_abs"]) + notional_abs
+    rows = list(daily.values())
+    rows.sort(key=lambda row: str(row["date"]))
+    return rows
 
 
 def _compact_date(value: object) -> str:

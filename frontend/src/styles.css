@@ -3367,6 +3367,69 @@ input[type="file"] {
   min-width: 132px;
 }
 
+.performance-kpi-card {
+  border-color: #20231f;
+  box-shadow: none;
+}
+
+.performance-rank-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.performance-lower-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(380px, 0.92fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.performance-lower-grid > .surface {
+  min-width: 0;
+}
+
+.performance-calendar-surface,
+.performance-rank-surface,
+.performance-trade-surface {
+  border-color: #20231f;
+  box-shadow: none;
+  background:
+    linear-gradient(90deg, rgba(32, 35, 31, 0.035) 1px, transparent 1px),
+    linear-gradient(rgba(32, 35, 31, 0.03) 1px, transparent 1px),
+    rgba(255, 255, 255, 0.94);
+  background-size: 28px 28px;
+}
+
+.performance-calendar-surface {
+  padding: 14px;
+}
+
+.performance-rank-surface {
+  padding: 14px;
+  gap: 10px;
+}
+
+.performance-trade-surface {
+  padding: 14px;
+}
+
+.performance-calendar-surface .surface__header h2,
+.performance-rank-surface .surface__header h2,
+.performance-trade-surface .surface__header h2 {
+  margin-bottom: 0;
+  color: #111;
+  font-size: 18px;
+}
+
+.performance-panel-toolbar select,
+.performance-panel-toolbar button {
+  min-height: 32px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
 .module-filter-bar {
   display: grid;
   grid-template-columns: repeat(4, minmax(150px, 1fr));
@@ -3444,19 +3507,36 @@ input[type="file"] {
 .contribution-list {
   display: grid;
   align-content: start;
-  gap: 12px;
+  gap: 8px;
 }
 
 .contribution-row {
+  position: relative;
   display: grid;
-  gap: 7px;
-  padding: 10px 0;
-  border-bottom: 1px solid rgba(223, 227, 216, 0.72);
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 6px 10px;
+  padding: 9px 9px 10px;
+  border: 1px solid rgba(32, 35, 31, 0.12);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.84);
 }
 
 .contribution-row:last-child {
-  border-bottom: 0;
-  padding-bottom: 0;
+  padding-bottom: 10px;
+}
+
+.contribution-rank {
+  grid-row: 1 / 4;
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  color: #20231f;
+  border: 1px solid #20231f;
+  border-radius: 4px;
+  background: #fff;
+  font-family: "SFMono-Regular", "Cascadia Mono", "Menlo", monospace;
+  font-size: 12px;
+  font-weight: 900;
 }
 
 .contribution-row__head,
@@ -3470,6 +3550,7 @@ input[type="file"] {
 .contribution-row__head strong {
   min-width: 0;
   color: var(--ink);
+  font-family: "SFMono-Regular", "Cascadia Mono", "Menlo", monospace;
   font-size: 14px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3484,37 +3565,38 @@ input[type="file"] {
 }
 
 .contribution-track {
-  height: 9px;
+  height: 8px;
   overflow: hidden;
+  border: 1px solid rgba(32, 35, 31, 0.16);
   border-radius: 999px;
-  background: #ecefe6;
+  background: #fff;
 }
 
 .contribution-track i {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, rgba(20, 122, 74, 0.58), var(--positive));
+  background: var(--positive);
 }
 
 .contribution-row--negative .contribution-track i {
-  background: linear-gradient(90deg, rgba(177, 58, 50, 0.5), var(--negative));
+  background: var(--negative);
 }
 
 .pnl-calendar {
   display: grid;
-  gap: 8px;
+  gap: 10px;
 }
 
 .pnl-calendar__weekdays,
 .pnl-calendar__grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 6px;
+  gap: 7px;
 }
 
 .pnl-calendar__weekdays span {
-  color: var(--muted);
+  color: #20231f;
   font-size: 12px;
   font-weight: 850;
   text-align: center;
@@ -3528,9 +3610,9 @@ input[type="file"] {
   align-content: space-between;
   gap: 10px;
   padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #f7f8f3;
+  border: 1px solid rgba(32, 35, 31, 0.22);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.78);
 }
 
 .pnl-day--empty {
@@ -3540,7 +3622,7 @@ input[type="file"] {
 
 .pnl-day span,
 .pnl-month span {
-  color: var(--muted);
+  color: #20231f;
   font-size: 12px;
   font-weight: 850;
 }
@@ -3574,9 +3656,47 @@ input[type="file"] {
   min-height: 104px;
 }
 
+.performance-lower-grid .pnl-calendar {
+  gap: 8px;
+}
+
+.performance-lower-grid .pnl-calendar__weekdays,
+.performance-lower-grid .pnl-calendar__grid {
+  gap: 6px;
+}
+
+.performance-lower-grid .pnl-day,
+.performance-lower-grid .pnl-month {
+  min-height: 56px;
+  gap: 6px;
+  padding: 7px;
+}
+
+.performance-lower-grid .pnl-calendar--year {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.performance-lower-grid .pnl-calendar--year .pnl-month {
+  min-height: 76px;
+}
+
 .monthly-trade-chart {
   display: grid;
-  gap: 14px;
+  min-width: 0;
+  gap: 10px;
+}
+
+.monthly-trade-chart .echart-canvas {
+  box-sizing: border-box;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid #20231f;
+  border-radius: 6px;
+  background:
+    linear-gradient(90deg, rgba(32, 35, 31, 0.035) 1px, transparent 1px),
+    linear-gradient(rgba(32, 35, 31, 0.03) 1px, transparent 1px),
+    rgba(247, 248, 243, 0.88);
+  background-size: 28px 28px;
 }
 
 .monthly-trade-chart svg {
@@ -3611,28 +3731,29 @@ input[type="file"] {
 .trade-stat-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
 }
 
 .trade-stat-card {
   display: grid;
   gap: 4px;
   min-width: 0;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #f7f8f3;
+  padding: 10px;
+  border: 1px solid #20231f;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 3px 3px 0 rgba(32, 35, 31, 0.1);
 }
 
 .trade-stat-card span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
 }
 
 .trade-stat-card strong {
   color: var(--ink);
-  font-size: 18px;
+  font-size: 16px;
   overflow-wrap: anywhere;
 }
 

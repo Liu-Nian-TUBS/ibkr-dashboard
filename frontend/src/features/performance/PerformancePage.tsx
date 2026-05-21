@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
+import type { EChartsOption } from "echarts";
 import { api } from "../../lib/api";
 import type { ApiRecord, PageState } from "../../lib/contracts";
+import { EChart } from "../../components/charts/EChart";
 import {
   asArray,
   asNumber,
@@ -19,8 +21,9 @@ import { DataState, DeltaText, EmptyState, MetricCard, PageHeader, StatusPill, S
 
 type CalendarMode = "month" | "year";
 
-type TradeMonthRow = {
-  month: string;
+type TradeCountRow = {
+  key: string;
+  label: string;
   trade_count: number;
   trade_notional_abs: number;
 };
@@ -72,9 +75,19 @@ function PerformanceContent({
   const daily = asArray(calendar.daily);
   const monthly = asArray(calendar.monthly);
   const monthlyTradeStats = asArray(data.monthly_trade_stats);
+  const dailyTradeStats = asArray(data.daily_trade_stats);
   const monthOptions = useMemo(() => buildMonthOptions(daily, monthly), [daily, monthly]);
   const yearOptions = useMemo(() => buildYearOptions(daily, monthly), [daily, monthly]);
-  const tradeRows = useMemo(() => buildRecentTradeRows(monthlyTradeStats), [monthlyTradeStats]);
+  const tradeRows = useMemo(
+    () => buildLinkedTradeRows({
+      mode: calendarMode,
+      selectedMonth,
+      selectedYear,
+      dailyTradeStats,
+      monthlyTradeStats,
+    }),
+    [calendarMode, dailyTradeStats, monthlyTradeStats, selectedMonth, selectedYear],
+  );
   const selectorOptions = calendarMode === "month" ? monthOptions : yearOptions;
   const selectorValue = calendarMode === "month" ? selectedMonth : selectedYear;
   const tradeWinRate = leaderboardSummary.trade_win_rate ?? leaderboardSummary.win_rate;
@@ -104,7 +117,6 @@ function PerformanceContent({
       <PageHeader
         eyebrow="业绩分析"
         title="收益贡献、盈亏日历与交易节奏"
-        description="贡献榜按累计口径统计，盈亏日历按当日或当月涨跌金额展示。"
         meta={
           <>
             <StatusPill tone="accent">{asText(data.valuation_mode, "mixed")}</StatusPill>
@@ -114,65 +126,67 @@ function PerformanceContent({
       />
 
       <div className="metric-grid metric-grid--compact">
-        <MetricCard label="至今累计盈利" value={<DeltaText value={leaderboardSummary.total_profit} currency={currency} />} tone="positive" />
-        <MetricCard label="至今累计亏损" value={<DeltaText value={leaderboardSummary.total_loss} currency={currency} />} tone="negative" />
-        <MetricCard label="净收益贡献" value={<DeltaText value={leaderboardSummary.net_pnl} currency={currency} />} tone={deltaClass(leaderboardSummary.net_pnl)} />
-        <MetricCard label="交易胜率" value={formatPercent(tradeWinRate)} tone="accent" />
-        <MetricCard label="盈利标的" value={formatInteger(leaderboardSummary.winning_symbols)} tone="positive" />
-        <MetricCard label="亏损标的" value={formatInteger(leaderboardSummary.losing_symbols)} tone="negative" />
+        <MetricCard className="performance-kpi-card" label="至今累计盈利" value={<DeltaText value={leaderboardSummary.total_profit} currency={currency} />} tone="positive" />
+        <MetricCard className="performance-kpi-card" label="至今累计亏损" value={<DeltaText value={leaderboardSummary.total_loss} currency={currency} />} tone="negative" />
+        <MetricCard className="performance-kpi-card" label="净收益贡献" value={<DeltaText value={leaderboardSummary.net_pnl} currency={currency} />} tone={deltaClass(leaderboardSummary.net_pnl)} />
+        <MetricCard className="performance-kpi-card" label="交易胜率" value={formatPercent(tradeWinRate)} tone="accent" />
+        <MetricCard className="performance-kpi-card" label="盈利标的" value={formatInteger(leaderboardSummary.winning_symbols)} tone="positive" />
+        <MetricCard className="performance-kpi-card" label="亏损标的" value={formatInteger(leaderboardSummary.losing_symbols)} tone="negative" />
       </div>
 
-      <div className="content-grid">
-        <Surface title="盈利 TOP10" subtitle="按已实现盈亏 + 未实现盈亏排序。">
+      <div className="performance-rank-grid">
+        <Surface title="盈利 TOP10" className="performance-rank-surface">
           <ContributionList rows={topProfit} currency={currency} />
         </Surface>
-        <Surface title="亏损 TOP10" subtitle="亏损越靠前，对总收益拖累越大。">
+        <Surface title="亏损 TOP10" className="performance-rank-surface">
           <ContributionList rows={topLoss} currency={currency} negative />
         </Surface>
       </div>
 
-      <Surface
-        title="盈亏日历"
-        subtitle={calendarMode === "month" ? "按日显示所选月份的当日盈亏。" : "按月汇总所选年份的月度盈亏。"}
-        action={
-          <div className="performance-panel-toolbar">
-            <select
-              value={selectorValue}
-              onChange={(event) => {
-                if (calendarMode === "month") {
-                  setSelectedMonth(event.target.value);
-                } else {
-                  setSelectedYear(event.target.value);
-                }
-              }}
-            >
-              {selectorOptions.length === 0 ? <option value="">暂无数据</option> : null}
-              {selectorOptions.map((option) => (
-                <option key={option} value={option}>
-                  {calendarMode === "month" ? formatMonth(option) : `${option} 年`}
-                </option>
-              ))}
-            </select>
-            <div className="segmented-control segmented-control--compact" role="group" aria-label="日历维度">
-              <button type="button" className={calendarMode === "month" ? "active" : ""} onClick={() => setCalendarMode("month")}>月</button>
-              <button type="button" className={calendarMode === "year" ? "active" : ""} onClick={() => setCalendarMode("year")}>年</button>
+      <div className="performance-lower-grid">
+        <Surface
+          title="盈亏日历"
+          className="performance-calendar-surface"
+          action={
+            <div className="performance-panel-toolbar">
+              <select
+                value={selectorValue}
+                onChange={(event) => {
+                  if (calendarMode === "month") {
+                    setSelectedMonth(event.target.value);
+                  } else {
+                    setSelectedYear(event.target.value);
+                  }
+                }}
+              >
+                {selectorOptions.length === 0 ? <option value="">暂无数据</option> : null}
+                {selectorOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {calendarMode === "month" ? formatMonth(option) : `${option} 年`}
+                  </option>
+                ))}
+              </select>
+              <div className="segmented-control segmented-control--compact" role="group" aria-label="日历维度">
+                <button type="button" className={calendarMode === "month" ? "active" : ""} onClick={() => setCalendarMode("month")}>月</button>
+                <button type="button" className={calendarMode === "year" ? "active" : ""} onClick={() => setCalendarMode("year")}>年</button>
+              </div>
             </div>
-          </div>
-        }
-      >
-        <PnlCalendar
-          mode={calendarMode}
-          selectedMonth={selectedMonth}
-          selectedYear={selectedYear}
-          daily={daily}
-          monthly={monthly}
-          currency={currency}
-        />
-      </Surface>
+          }
+        >
+          <PnlCalendar
+            mode={calendarMode}
+            selectedMonth={selectedMonth}
+            selectedYear={selectedYear}
+            daily={daily}
+            monthly={monthly}
+            currency={currency}
+          />
+        </Surface>
 
-      <Surface title="月度交易统计" subtitle="近一年交易笔数柱状图。">
-        <MonthlyTradeChart rows={tradeRows} currency={currency} />
-      </Surface>
+        <Surface title={calendarMode === "month" ? "每日交易统计" : "月度交易统计"} className="performance-trade-surface">
+          <TradeCountChart rows={tradeRows} currency={currency} mode={calendarMode} />
+        </Surface>
+      </div>
     </>
   );
 }
@@ -190,6 +204,7 @@ function ContributionList({ rows, currency, negative = false }: { rows: ApiRecor
         const width = clamp(Math.abs(total) / max, 0.04, 1) * 100;
         return (
           <div className={`contribution-row ${negative ? "contribution-row--negative" : ""}`.trim()} key={`${asText(row.symbol)}-${index}`}>
+            <span className="contribution-rank">{String(index + 1).padStart(2, "0")}</span>
             <div className="contribution-row__head">
               <strong>{asText(row.symbol)}</strong>
               <DeltaText value={total} currency={currency} />
@@ -323,49 +338,70 @@ function YearPnlCalendar({ selectedYear, monthly, currency }: { selectedYear: st
   );
 }
 
-function MonthlyTradeChart({ rows, currency }: { rows: TradeMonthRow[]; currency: string }) {
+function TradeCountChart({ rows, currency, mode }: { rows: TradeCountRow[]; currency: string; mode: CalendarMode }) {
   if (rows.length === 0) {
-    return <EmptyState compact title="暂无交易统计" detail="导入交易记录后显示近一年交易笔数。" />;
+    return <EmptyState compact title="暂无交易统计" detail="导入交易记录后显示交易笔数。" />;
   }
-  const width = 900;
-  const height = 280;
-  const padding = { top: 18, right: 18, bottom: 46, left: 52 };
-  const plotWidth = width - padding.left - padding.right;
-  const plotHeight = height - padding.top - padding.bottom;
   const maxCount = Math.max(...rows.map((row) => row.trade_count), 1);
-  const yTicks = Array.from(new Set([0, Math.ceil(maxCount / 2), maxCount]));
-  const slotWidth = plotWidth / rows.length;
-  const barWidth = Math.max(18, slotWidth * 0.58);
   const totalTrades = rows.reduce((sum, row) => sum + row.trade_count, 0);
   const totalNotional = rows.reduce((sum, row) => sum + row.trade_notional_abs, 0);
   const averageTrades = totalTrades / rows.length;
+  const averageLabel = mode === "month" ? "日均交易" : "月均交易";
+  const option: EChartsOption = {
+    animationDuration: 240,
+    grid: { left: 32, right: 8, top: 12, bottom: 24, containLabel: true },
+    tooltip: {
+      trigger: "axis",
+      borderColor: "#20231f",
+      backgroundColor: "rgba(255,255,255,0.98)",
+      textStyle: { color: "#20231f", fontSize: 12, fontWeight: 700 },
+      axisPointer: { type: "shadow", shadowStyle: { color: "rgba(32,35,31,0.06)" } },
+      formatter: (params) => {
+        const item = Array.isArray(params) ? params[0] : params;
+        const row = rows[asNumber((item as { dataIndex?: unknown }).dataIndex, -1)];
+        const count = asNumber((item as { value?: unknown }).value, 0);
+        return [
+          `<strong>${row?.key ?? asText((item as { axisValue?: unknown }).axisValue, "")}</strong>`,
+          `交易笔数 ${formatInteger(count)}`,
+          row ? `交易额 ${formatCurrency(row.trade_notional_abs, currency)}` : "",
+        ].filter(Boolean).join("<br/>");
+      },
+    },
+    xAxis: {
+      type: "category",
+      data: rows.map((row) => row.label),
+      axisTick: { show: false },
+      axisLine: { lineStyle: { color: "#20231f" } },
+      axisLabel: { color: "#5d6558", fontSize: 11, fontWeight: 800, hideOverlap: true },
+    },
+    yAxis: {
+      type: "value",
+      min: 0,
+      max: Math.max(maxCount, 1),
+      splitNumber: 3,
+      axisLabel: { color: "#5d6558", fontSize: 11, fontWeight: 800, formatter: (value: number) => formatInteger(value) },
+      splitLine: { lineStyle: { color: "rgba(32,35,31,0.13)", type: "dashed" } },
+    },
+    series: [
+      {
+        name: "交易笔数",
+        type: "bar",
+        data: rows.map((row) => row.trade_count),
+        barMaxWidth: 22,
+        itemStyle: {
+          color: "#20231f",
+          borderRadius: [4, 4, 0, 0],
+        },
+        emphasis: {
+          itemStyle: { color: "#4b5147" },
+        },
+      },
+    ],
+  };
 
   return (
     <div className="monthly-trade-chart">
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="近一年月度交易笔数柱状图">
-        {yTicks.map((tick) => {
-          const y = padding.top + plotHeight - (tick / maxCount) * plotHeight;
-          return (
-            <g key={tick}>
-              <line x1={padding.left} x2={width - padding.right} y1={y} y2={y} className="monthly-trade-chart__grid" />
-              <text x={padding.left - 12} y={y + 4} textAnchor="end">{formatInteger(tick)}</text>
-            </g>
-          );
-        })}
-        {rows.map((row, index) => {
-          const barHeight = (row.trade_count / maxCount) * plotHeight;
-          const x = padding.left + index * slotWidth + (slotWidth - barWidth) / 2;
-          const y = padding.top + plotHeight - barHeight;
-          return (
-            <g key={row.month}>
-              <rect x={x} y={y} width={barWidth} height={barHeight} rx="5" className="monthly-trade-chart__bar">
-                <title>{`${formatMonth(row.month)} ${formatInteger(row.trade_count)} 笔`}</title>
-              </rect>
-              <text x={x + barWidth / 2} y={height - 18} textAnchor="middle">{formatMonth(row.month).slice(5)}</text>
-            </g>
-          );
-        })}
-      </svg>
+      <EChart option={option} height={220} />
       <div className="trade-stat-summary">
         <div className="trade-stat-card">
           <span>总交易笔数</span>
@@ -376,7 +412,7 @@ function MonthlyTradeChart({ rows, currency }: { rows: TradeMonthRow[]; currency
           <strong>{formatCurrency(totalNotional, currency)}</strong>
         </div>
         <div className="trade-stat-card">
-          <span>月均交易</span>
+          <span>{averageLabel}</span>
           <strong>{formatNumber(averageTrades, 1)}</strong>
         </div>
       </div>
@@ -405,23 +441,64 @@ function buildYearOptions(daily: ApiRecord[], monthly: ApiRecord[]): string[] {
   return [...keys].sort().reverse();
 }
 
-function buildRecentTradeRows(rows: ApiRecord[]): TradeMonthRow[] {
-  const monthly = new Map<string, TradeMonthRow>();
+function buildLinkedTradeRows({
+  mode,
+  selectedMonth,
+  selectedYear,
+  dailyTradeStats,
+  monthlyTradeStats,
+}: {
+  mode: CalendarMode;
+  selectedMonth: string;
+  selectedYear: string;
+  dailyTradeStats: ApiRecord[];
+  monthlyTradeStats: ApiRecord[];
+}): TradeCountRow[] {
+  if (mode === "year") {
+    return buildYearTradeRows(monthlyTradeStats, selectedYear);
+  }
+  return buildMonthTradeRows(dailyTradeStats, selectedMonth);
+}
+
+function buildMonthTradeRows(rows: ApiRecord[], selectedMonth: string): TradeCountRow[] {
+  if (!selectedMonth) return [];
+  const [year, month] = selectedMonth.split("-").map((part) => Number(part));
+  if (!year || !month) return [];
+  const daily = new Map<string, TradeCountRow>();
   for (const row of rows) {
-    const month = normalizeMonthKey(row.month);
-    if (!month) continue;
-    monthly.set(month, {
-      month,
+    const date = normalizeDateKey(row.date);
+    if (!date || date.slice(0, 7) !== selectedMonth) continue;
+    daily.set(date, {
+      key: date,
+      label: date.slice(8, 10),
       trade_count: asNumber(row.trade_count, 0),
       trade_notional_abs: asNumber(row.trade_notional_abs, 0),
     });
   }
-  const keys = [...monthly.keys()].sort();
-  const lastMonth = keys[keys.length - 1];
-  if (!lastMonth) return [];
+  const daysInMonth = new Date(year, month, 0).getDate();
+  return Array.from({ length: daysInMonth }, (_, index) => {
+    const day = String(index + 1).padStart(2, "0");
+    const date = `${selectedMonth}-${day}`;
+    return daily.get(date) ?? { key: date, label: day, trade_count: 0, trade_notional_abs: 0 };
+  });
+}
+
+function buildYearTradeRows(rows: ApiRecord[], selectedYear: string): TradeCountRow[] {
+  if (!selectedYear) return [];
+  const monthly = new Map<string, TradeCountRow>();
+  for (const row of rows) {
+    const month = normalizeMonthKey(row.month);
+    if (!month || month.slice(0, 4) !== selectedYear) continue;
+    monthly.set(month, {
+      key: month,
+      label: month.slice(5, 7),
+      trade_count: asNumber(row.trade_count, 0),
+      trade_notional_abs: asNumber(row.trade_notional_abs, 0),
+    });
+  }
   return Array.from({ length: 12 }, (_, index) => {
-    const month = addMonths(lastMonth, index - 11);
-    return monthly.get(month) ?? { month, trade_count: 0, trade_notional_abs: 0 };
+    const month = `${selectedYear}-${String(index + 1).padStart(2, "0")}`;
+    return monthly.get(month) ?? { key: month, label: month.slice(5, 7), trade_count: 0, trade_notional_abs: 0 };
   });
 }
 
@@ -437,12 +514,6 @@ function normalizeMonthKey(value: unknown): string {
   const digits = text.replace(/\D/g, "");
   if (digits.length < 6) return "";
   return `${digits.slice(0, 4)}-${digits.slice(4, 6)}`;
-}
-
-function addMonths(month: string, offset: number): string {
-  const [year, monthIndex] = month.split("-").map((part) => Number(part));
-  const date = new Date(year, monthIndex - 1 + offset, 1);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
 function getPnlHeatStyle(value: number, maxAbs: number): CSSProperties {
