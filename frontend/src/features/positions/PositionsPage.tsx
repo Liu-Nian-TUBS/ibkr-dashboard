@@ -144,6 +144,17 @@ export function PositionsPage() {
     () => industryRows.map((row) => ({ label: asText(row.industry, "Unknown"), value: Math.max(0, asNumber(row.market_value, 0)) })),
     [industryRows],
   );
+  const unknownIndustrySymbols = useMemo(
+    () => allRows
+      .filter((row) => {
+        const industry = asText(row.industry, "Unknown").trim();
+        return !industry || industry.toLowerCase() === "unknown";
+      })
+      .map((row) => asText(row.symbol, "").toUpperCase())
+      .filter(Boolean)
+      .sort(),
+    [allRows],
+  );
   const mappingBySymbol = useMemo(() => {
     const map = new Map<string, string>();
     for (const row of mappingRows) {
@@ -267,7 +278,6 @@ export function PositionsPage() {
       <PageHeader
         eyebrow="持仓明细"
         title="当前持仓、行业与个股轨迹"
-        description="持仓列表按最新 XML 报告日聚合展示；行业映射、成本口径和买卖点都从同一批真实数据闭环。"
         meta={
           <>
             <StatusPill tone={asText(state.positions?.valuation_mode) === "realtime" ? "positive" : "neutral"}>
@@ -282,7 +292,7 @@ export function PositionsPage() {
       {state.error ? <div className="inline-error">{state.error}</div> : null}
 
       <div className="content-grid">
-        <Surface title="持仓汇总" subtitle="按当前净值统计每个持仓股票与现金占比，不受下方过滤影响。">
+        <Surface title="持仓汇总" className="positions-chart-surface positions-chart-surface--holdings">
           <PieChart
             rows={holdingPieRows}
             totalOverride={equity}
@@ -290,7 +300,7 @@ export function PositionsPage() {
             emptyDetail="导入最新持仓快照后显示股票与现金占比。"
           />
         </Surface>
-        <Surface title="行业分布" subtitle="行业优先使用自定义映射，未设置时显示 Unknown。">
+        <Surface title="行业分布" className="positions-chart-surface">
           <PieChart
             rows={industryPieRows}
             emptyTitle="暂无行业分布"
@@ -306,12 +316,18 @@ export function PositionsPage() {
             onSave={saveMapping}
             onDelete={deleteMapping}
           />
+          {unknownIndustrySymbols.length ? (
+            <div className="unknown-industry-note">
+              <span>Unknown</span>
+              <strong>{unknownIndustrySymbols.join(" / ")}</strong>
+            </div>
+          ) : null}
         </Surface>
       </div>
 
       <Surface
         title="持仓明细表"
-        subtitle="过滤只作用于明细表；点击表头排序，点击行打开 K 线弹窗。"
+        className="positions-table-surface"
         action={
           <div className="cost-mode-control">
             <span>成本价：</span>
@@ -335,13 +351,11 @@ export function PositionsPage() {
       >
         <Toolbar>
           <Field label="股票代码">
-            <input value={query.symbol} placeholder="AAPL" onChange={(event) => setQuery({ ...query, symbol: event.target.value.toUpperCase(), page: 1 })} />
-          </Field>
-          <Field label="每页">
-            <select value={query.page_size} onChange={(event) => setQuery({ ...query, page_size: Number(event.target.value), page: 1 })}>
-              <option value={20}>20</option>
-              <option value={50}>50</option>
-              <option value={100}>100</option>
+            <select value={query.symbol} onChange={(event) => setQuery({ ...query, symbol: event.target.value, page: 1 })}>
+              <option value="">全部</option>
+              {rowSymbols.map((symbol) => (
+                <option value={symbol} key={symbol}>{symbol}</option>
+              ))}
             </select>
           </Field>
           <button type="button" onClick={load}>查询</button>
@@ -387,12 +401,19 @@ export function PositionsPage() {
             { key: "realtime_value", label: "持仓市值", align: "right", render: (row) => formatCurrency(row.realtime_value, currency) },
             { key: "unrealized_pnl_snapshot", label: "未实现盈亏", align: "right", render: (row) => <DeltaText value={row.unrealized_pnl_snapshot} currency={currency} /> },
             { key: "realized_pnl_total", label: "已实现盈亏", align: "right", render: (row) => <DeltaText value={row.realized_pnl_total} currency={currency} /> },
-            { key: "weight", label: "占比", align: "right", render: (row) => formatPercent(asNumber(row.realtime_value, 0) / Math.max(equity, 1)) },
-            { key: "quote_source", label: "价格源" },
+            { key: "weight", label: "占比", align: "right", render: (row) => <WeightCell value={asNumber(row.realtime_value, 0) / Math.max(equity, 1)} /> },
+            { key: "quote_source", label: "价格源", render: (row) => <span className="quote-source-pill">{asText(row.quote_source, "-")}</span> },
           ]}
           empty="暂无持仓记录"
         />
         <div className="table-footer">
+          <Field label="每页">
+            <select value={query.page_size} onChange={(event) => setQuery({ ...query, page_size: Number(event.target.value), page: 1 })}>
+              <option value={20}>20</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+            </select>
+          </Field>
           <Pager page={query.page} pageSize={pageSize} total={total} onPageChange={(page) => setQuery({ ...query, page })} />
         </div>
       </Surface>
@@ -570,6 +591,16 @@ function IndustryMappingEditor({
   );
 }
 
+function WeightCell({ value }: { value: number }) {
+  const safeValue = Math.max(0, value);
+  return (
+    <span className="weight-cell">
+      <i style={{ width: `${Math.min(safeValue * 100, 100)}%` }} />
+      <b>{formatPercent(safeValue)}</b>
+    </span>
+  );
+}
+
 function PositionDetailModal({
   selected,
   detail,
@@ -604,7 +635,6 @@ function PositionDetailModal({
           <div>
             <span className="eyebrow">持仓详情</span>
             <h2 id="position-modal-title">{asText(selected.symbol)} K 线与买卖点</h2>
-            <p>日 K 线来自历史价格表，买入点与卖出点来自真实 Trade 记录。</p>
           </div>
           <button type="button" className="modal-close-button" onClick={onClose} aria-label="关闭">×</button>
         </header>

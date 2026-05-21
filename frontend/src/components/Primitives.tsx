@@ -10,7 +10,7 @@ export function PageHeader({
 }: {
   eyebrow: string;
   title: string;
-  description: string;
+  description?: string;
   meta?: ReactNode;
 }) {
   return (
@@ -18,7 +18,7 @@ export function PageHeader({
       <div>
         <span className="eyebrow">{eyebrow}</span>
         <h1>{title}</h1>
-        <p>{description}</p>
+        {description ? <p>{description}</p> : null}
       </div>
       {meta ? <div className="page-header__meta">{meta}</div> : null}
     </header>
