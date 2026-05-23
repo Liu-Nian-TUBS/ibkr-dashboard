@@ -520,19 +520,7 @@ class PortfolioAnalysisService:
             ai_overlay=ai_overlay,
         )
         response.charts = self._portfolio_risk_charts(positions, total)
-        response.narrative = self._narrative(
-            "portfolio",
-            {
-                "concentration": {key: metric.model_dump(mode="json") for key, metric in response.concentration.items()},
-                "factor_exposure": {key: metric.model_dump(mode="json") for key, metric in response.factor_exposure.items()},
-                "correlation": {key: metric.model_dump(mode="json") for key, metric in response.correlation.items()},
-                "tail_risk": {key: metric.model_dump(mode="json") for key, metric in response.tail_risk.items()},
-                "macro_sensitivity": {key: metric.model_dump(mode="json") for key, metric in response.macro_sensitivity.items()},
-                "hedge_suggestions": response.hedge_suggestions,
-                "top_positions": _top_position_rows(positions, total, limit=6),
-            },
-            refresh_ai=False,
-        )
+        response.narrative = _portfolio_overlay_narrative(ai_overlay)
         return response
 
     def _portfolio_external_context(self, symbols: list[str]) -> dict[str, Any]:
@@ -590,28 +578,10 @@ class PortfolioAnalysisService:
             external_context=external_context,
         )
         if provider.name != "mock" and not refresh_ai:
-            api_key = str(getattr(provider, "api_key", "") or "")
-            if not api_key:
-                return self._ai_narrative_service.generate_portfolio_overlay(
-                    provider=provider,
-                    metrics=metrics,
-                    cache_key=cache_key,
-                )
-            overlay = self._ai_narrative_service.cached_portfolio_overlay_or_pending(
+            overlay = self._ai_narrative_service.cached_portfolio_overlay_or_unavailable(
                 provider=provider,
                 cache_key=cache_key,
             )
-            if overlay.get("reason") == "structured_ai_overlay_waiting_for_background_refresh":
-                self._ai_narrative_service.mark_portfolio_overlay_started(provider=provider, cache_key=cache_key)
-                Thread(
-                    target=self._refresh_portfolio_ai_overlay,
-                    args=(provider, metrics, cache_key),
-                    daemon=True,
-                ).start()
-                overlay = self._ai_narrative_service.cached_portfolio_overlay_or_pending(
-                    provider=provider,
-                    cache_key=cache_key,
-                )
             return _portfolio_overlay_with_local_fallback(provider=provider, metrics=metrics, overlay=overlay)
         overlay = self._ai_narrative_service.generate_portfolio_overlay(
             provider=provider,
@@ -839,8 +809,11 @@ class PortfolioAnalysisService:
         return build_ai_provider(
             provider_name=settings.ai_provider,
             openai_api_key=settings.openai_api_key,
+            ai_model=settings.ai_model,
             minimax_api_key=settings.minimax_api_key,
             minimax_base_url=settings.minimax_base_url,
+            deepseek_api_key=settings.deepseek_api_key,
+            deepseek_base_url=settings.deepseek_base_url,
         )
 
     def _resolve_stock_symbol(self, symbol: str | None) -> str | None:
@@ -1379,10 +1352,10 @@ def _portfolio_rebalance_advice(
     confidence = _rebalance_confidence(external_context, bool(risk_rows))
     source = "portfolio_positions+external_research+portfolio_ai_rules" if _has_external_ready(external_context) else "portfolio_positions+portfolio_ai_rules"
     cards = [
-        {"rank": "①", "title": "现在最值得研究的方向", "body": best_direction},
-        {"rank": "②", "title": "最可能被低估的标的", "body": undervalued},
-        {"rank": "③", "title": "最拥挤/最需要小心", "body": crowded_text},
-        {"rank": "④", "title": "未来30天需要盯的催化剂", "body": catalysts},
+        {"rank": "01", "icon": "compass", "title": "现在最值得研究的方向", "body": best_direction},
+        {"rank": "02", "icon": "search", "title": "最可能被低估的标的", "body": undervalued},
+        {"rank": "03", "icon": "alert", "title": "最拥挤/最需要小心", "body": crowded_text},
+        {"rank": "04", "icon": "calendar", "title": "未来30天需要盯的催化剂", "body": catalysts},
     ]
     return PortfolioRebalanceAdvice(
         cards=cards,
@@ -1635,6 +1608,8 @@ def _portfolio_overlay_with_local_fallback(
     if status not in {AnalysisStatus.ERROR.value, AnalysisStatus.UNAVAILABLE.value}:
         return overlay
     reason = str(overlay.get("reason") or f"{getattr(provider, 'name', 'ai_provider')}_structured_overlay_unavailable")
+    if reason == "structured_ai_overlay_waiting_for_manual_refresh":
+        return overlay
     fallback = MockAIProvider().generate_portfolio_overlay(metrics=metrics)
     fallback["status"] = AnalysisStatus.READY.value
     fallback["provider"] = "local_rules"
@@ -1642,6 +1617,36 @@ def _portfolio_overlay_with_local_fallback(
     fallback["as_of"] = _now_iso()
     fallback["reason"] = f"fallback_after_{reason}"
     return fallback
+
+
+def _portfolio_overlay_narrative(overlay: dict[str, Any]) -> AINarrativePayload:
+    provider = str(overlay.get("provider") or "local_rules")
+    model = overlay.get("model")
+    status = overlay.get("status")
+    reason = overlay.get("reason")
+    if status == AnalysisStatus.READY.value:
+        return AINarrativePayload(
+            provider=provider,
+            model=str(model) if model else None,
+            status=AnalysisStatus.READY,
+            summary="结构化持仓分析已生成。",
+            bullets=[],
+            risks=[],
+            source_metrics=["portfolio_overlay"],
+            as_of=str(overlay.get("as_of")) if overlay.get("as_of") else _now_iso(),
+            confidence=_bounded_confidence(overlay.get("confidence"), fallback=0.0),
+        )
+    return AINarrativePayload(
+        provider=provider,
+        model=str(model) if model else None,
+        status=AnalysisStatus.UNAVAILABLE,
+        bullets=[],
+        risks=[],
+        source_metrics=[],
+        as_of=str(overlay.get("as_of")) if overlay.get("as_of") else _now_iso(),
+        confidence=0.0,
+        reason=str(reason or "structured_ai_overlay_waiting_for_manual_refresh"),
+    )
 
 
 def _apply_portfolio_ai_overlay(
@@ -1797,12 +1802,18 @@ def _clean_advice_cards(value: Any) -> list[dict[str, str]]:
     for index, item in enumerate(value[:4], start=1):
         if not isinstance(item, dict):
             continue
-        rank = _clean_overlay_text(item.get("rank")) or f"{index}"
+        rank = _clean_overlay_text(item.get("rank")) or f"{index:02d}"
+        icon = _clean_overlay_text(item.get("icon")) or _advice_icon_for_index(index)
         title = _clean_overlay_text(item.get("title")) or "结论"
         body = _clean_overlay_text(item.get("body")) or ""
         if body:
-            cards.append({"rank": rank, "title": title, "body": body})
+            cards.append({"rank": rank, "icon": icon, "title": title, "body": body})
     return cards
+
+
+def _advice_icon_for_index(index: int) -> str:
+    icons = {1: "compass", 2: "search", 3: "alert", 4: "calendar"}
+    return icons.get(index, "check")
 
 
 def _bounded_confidence(value: Any, *, fallback: float | None) -> float:

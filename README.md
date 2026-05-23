@@ -1,54 +1,76 @@
 # IBKR Dashboard
 
-IBKR Dashboard 是一个本地运行的 IBKR 投资分析看板。它读取 Interactive Brokers Flex XML，对资产、持仓、业绩、交易记录和出入金记录做可视化分析。
+IBKR Dashboard 是一个本地运行的 IBKR 投资分析看板。它读取 Interactive Brokers Flex XML，对资产、持仓、业绩、交易记录、出入金记录和组合风险做可视化分析。
 
-本项目只做只读分析，不提供交易、下单、撤单或风控功能。
+本项目只做只读分析，不提供交易、下单、撤单、改单、解锁交易或风控执行能力。真实账户数据、XML 文件和 API Key 都应保留在本机环境中。
 
 ## 适合谁使用
 
 - 有 IBKR 账户，并且可以导出 Flex XML 的用户。
-- 想在自己电脑上查看投资组合，而不是把真实交易数据上传到第三方网站的用户。
-- 不熟悉 Python、Node.js、Elasticsearch 等开发环境，但可以按步骤安装 Docker Desktop 的用户。
+- 想在自己电脑上整理投资组合，不想把真实交易数据上传到第三方网站的用户。
+- 希望同时查看资产曲线、持仓结构、交易业绩和组合风险的个人投资者。
+- 不想单独配置 Python、Node.js、Elasticsearch，也可以通过 Docker 一键运行的用户。
 
-## V1 主要功能
+## 功能概览
 
-- 设置与导入：基础币种、时区、实时价格优先、拉取频率、Finnhub 和 IBKR Flex 凭据保存、XML 文件导入。
-- 资产总览：总资产、现金、持仓市值、年内佣金、资产收益、净值曲线、现金流事件。
-- 净值曲线：支持简单加权、时间加权、现金加权；支持 1 周、本月至今、1 个月、3 个月、本年至今、1 年、全部和自定义区间。
-- 对比曲线：支持标普 500、纳斯达克、QQQ；历史数据会使用本地缓存，缺失时再从外部数据源拉取。
-- 持仓明细：持仓汇总饼图、行业分布饼图、自定义行业映射、持仓明细表、移动加权 / 摊薄成本切换、个股 K 线弹窗、买卖点标记。
-- 业绩分析：盈利 TOP10、亏损 TOP10、累计盈利、累计亏损、交易胜率、盈亏日历、近一年月度交易统计。
-- 交易明细：交易记录查询和出入金记录查询，支持时间、代码、方向、币种筛选和分页。
+### 资产总览
 
-## V2 持仓分析
+- 展示总资产、现金、持仓市值、年内佣金、收益率和风险提示。
+- 净值曲线支持不同时间范围：1 周、本月至今、1 个月、3 个月、本年至今、1 年、全部和自定义区间。
+- 收益计算支持简单加权、时间加权、现金加权等口径。
+- 可与标普 500、纳斯达克、QQQ 等基准曲线对比。
+- 净值曲线上会标注入金、出金等现金流事件，方便解释曲线跳变。
 
-V2 仍然坚持只读分析，不会触发任何交易行为。新版把分析入口收敛为一个顶层“持仓分析”模块，里面包含三个子页：
+### 持仓明细
 
-- 市场分析：围绕当前持仓展示相关市场状态、相对强弱指数、组合影响、机会和风险。
-- 持仓分析：展示因子暴露、集中度、相关性、尾部风险、智能主题暴露、宏观敏感性和对冲防御思路；本版不展示期权希腊值或到期分布。
-- 个股分析：针对当前持仓或指定股票展示方向判断、核心变化、组合影响、产业链传导、市场误判和智能摘要。
+- 展示持仓汇总、行业分布、持仓明细表和盈亏情况。
+- 支持自定义行业映射，适合把 ETF、ADR 或特殊标的归入自己的分类体系。
+- 成本口径支持移动加权和摊薄成本切换。
+- 点击持仓明细表中的标的，可以查看个股 K 线。
+- K 线上会标注买入、卖出等操作记录，方便复盘交易位置。
 
-所有 V2 指标都带有统一状态字段：数据来源、更新时间、置信度、状态和缺失原因。外部数据不可用时，页面会明确显示缺失，而不是用猜测值填充。
+### 业绩分析
 
-V2 还增加了这些集成能力：
+- 展示盈利 TOP10、亏损 TOP10、累计盈利、累计亏损和交易胜率。
+- 支持盈亏日历，快速查看哪些日期贡献了主要收益或回撤。
+- 支持近一年月度交易统计，帮助识别交易频率和结果变化。
 
-- 模型 provider 可配置，第一版默认 OpenAI；没有 API Key 时会安全降级为不可用状态。
-- 长桥行情可作为只读 provider 使用，用于补充历史 K 线和行情快照。
-- Futu OpenD 只作为只读行情来源使用，接口层不包含下单、改单、撤单或解锁交易能力。
-- Telegram 支持多 Chat ID 白名单、只读命令 dry-run 和定时日报发送。
-- MCP stdio server 暴露只读工具，供 Claude Desktop、Codex Desktop 等客户端读取本地持仓分析。
+### 交易明细
+
+- 支持交易记录查询，按时间、代码、方向、币种筛选和分页。
+- 支持出入金记录查询，帮助核对现金流和账户净值变化。
+- 交易记录和现金流水保持 IBKR Flex XML 的原始口径，便于追溯。
+
+### 持仓分析
+
+- 提供市场分析和组合持仓分析两个视角。
+- 市场分析围绕当前持仓展示市场状态、强弱指标、组合影响、机会和风险。
+- 持仓分析展示集中度、主题暴露、相关性、尾部风险、宏观敏感性和逐项持仓风险。
+- 风险图表用于观察权重、涨跌、主题暴露之间的关系。
+- 持仓风险表支持结构化 AI 输出，给出每个标的的逻辑状态、风险点、跟踪点和只读建议。
+- 外部数据不可用时，页面会明确显示缺失或不可用，不会编造数值。
+
+### 设置与导入
+
+- 支持基础币种、时区、实时价格优先、拉取频率等基础设置。
+- 支持 Flex XML 文件导入。
+- 支持 IBKR Flex 在线同步配置。
+- 支持 Finnhub、长桥、Yahoo Finance、Futu OpenD 等只读行情来源。
+- 支持 OpenAI、MiniMax、DeepSeek 和本地 mock provider，用于智能摘要和结构化持仓分析。
+- 支持 Telegram 只读命令和日报推送。
+- 提供 MCP stdio server，可接入 Claude Desktop、Codex Desktop 等 AI 客户端读取本地分析结果。
 
 ## 技术栈
 
-- 前端：React、TypeScript、Vite。
-- 后端：Python、FastAPI。
-- 存储：Elasticsearch。
-- 启动方式：Docker Compose 一键启动前端、后端和数据库。
-- 数据来源：IBKR Flex XML、长桥、Finnhub、Yahoo Finance、Futu OpenD（只读）。
+- 前端：React 18、TypeScript、Vite、ECharts。
+- 后端：Python 3.12+、FastAPI、APScheduler、httpx。
+- 存储：Elasticsearch；测试和临时开发可使用内存存储。
+- 容器化：Docker Compose 一键启动 Elasticsearch、后端 API 和前端。
+- 数据来源：IBKR Flex XML、IBKR Flex Web Service、长桥、Finnhub、Yahoo Finance、Futu OpenD（只读）。
 
 普通使用不需要单独安装 Python、Node.js 或 Elasticsearch；Docker 会在启动时自动准备这些环境。
 
-## 安装前准备
+## 快速启动
 
 ### 1. 安装 Docker Desktop
 
@@ -58,16 +80,16 @@ V2 还增加了这些集成能力：
 
 安装完成后，打开 Docker Desktop。等它显示正在运行后，再继续下面的步骤。
 
-### 2. 下载本项目
+### 2. 下载项目
 
-如果你已经安装 Git，可以在终端运行：
+如果已经安装 Git，可以在终端运行：
 
 ```bash
 git clone <这个 GitHub 仓库地址>
 cd ibkr-dashboard
 ```
 
-如果你没有安装 Git，也可以在 GitHub 页面点击：
+如果没有安装 Git，也可以在 GitHub 页面点击：
 
 ```text
 Code -> Download ZIP
@@ -77,7 +99,7 @@ Code -> Download ZIP
 
 macOS 用户可以在 Finder 中打开项目文件夹，右键选择“服务 -> 新建位于文件夹位置的终端窗口”。如果没有这个菜单，也可以打开“终端”，输入 `cd `，把项目文件夹拖进终端，再按回车。
 
-## 启动
+### 3. 启动应用
 
 在项目文件夹里运行：
 
@@ -99,15 +121,41 @@ http://localhost:5176
 docker compose up
 ```
 
-## 本机开发模式（不使用 Docker）
+## 停止应用
 
-如果你要继续开发，推荐使用本机开发模式。项目根目录支持一条命令同时启动后端和前端。
+如果是用 `docker compose up` 启动的，在同一个终端窗口按：
 
-### 第一次准备
+```text
+Ctrl + C
+```
 
-1. 安装 Python 3（建议 3.12+）。
-2. 安装 Node.js（建议 20+）。
-3. 确保本机可用 Elasticsearch（默认读取 `http://127.0.0.1:9200`）。
+如果想让它在后台运行，可以用：
+
+```bash
+docker compose up -d
+```
+
+后台运行时，停止命令是：
+
+```bash
+docker compose down
+```
+
+`docker compose down` 不会删除已经导入的数据和设置。只有运行下面这个命令才会清空本地数据库，请谨慎使用：
+
+```bash
+docker compose down -v
+```
+
+## 本机开发
+
+如果要继续开发，推荐使用本机开发模式。项目根目录支持一条命令同时启动后端和前端。
+
+### 开发环境准备
+
+1. 安装 Python 3.12+。
+2. 安装 Node.js 20+。
+3. 确保本机可用 Elasticsearch，默认读取 `http://127.0.0.1:9200`。
 
 ### 一条命令启动
 
@@ -120,40 +168,97 @@ npm run dev:all
 脚本会自动处理以下事项：
 
 - 首次创建 `.venv` 虚拟环境并安装后端依赖。
-- 首次安装前端依赖（`frontend/node_modules`）。
-- 启动后端（`http://127.0.0.1:8085`）和前端（`http://127.0.0.1:5176`）。
+- 首次安装前端依赖。
+- 启动后端 `http://127.0.0.1:8085`。
+- 启动前端 `http://127.0.0.1:5176`。
 
 停止方式：在当前终端按 `Ctrl + C`，脚本会同时停止前后端进程。
 
 ### 可选环境变量
 
-你可以在启动前临时覆盖默认端口和 ES 地址：
+可以在启动前临时覆盖默认端口和 ES 地址：
 
 ```bash
 BACKEND_PORT=8086 FRONTEND_PORT=5177 ES_HOST=http://127.0.0.1:9200 npm run dev:all
 ```
 
-## V2 集成配置
+如果只是临时开发或跑测试，不想连接持久化 Elasticsearch，可以使用内存存储：
 
-### OpenAI / MiniMax 与智能摘要
+```bash
+ES_BACKEND=in_memory npm run dev:all
+```
 
-进入“设置与导入”，在 V2 集成设置中选择模型 provider。第一版默认是 `openai`。
+### 常用验证命令
 
-- `openai`：填写 OpenAI API Key，后端会通过 OpenAI Responses API 生成结构化摘要。
-- `minimax`：填写 MiniMax API Key，后端会调用 MiniMax OpenAI-compatible Chat Completions API，默认模型是 `MiniMax-M2.7`，默认 Base URL 是 `https://api.minimaxi.com/v1`。
+前端构建：
+
+```bash
+npm --prefix frontend run build
+```
+
+后端测试：
+
+```bash
+cd backend
+ES_BACKEND=in_memory pytest -q tests/
+```
+
+## 第一次使用
+
+1. 打开 `http://localhost:5176`。
+2. 进入“设置与导入”。
+3. 设置基础币种：`USD`、`HKD` 或 `RMB`。基础币种主要用于资产总览；持仓、交易、业绩等页面保留账户和 XML 的原始计价口径，避免跨页面换算造成混淆。
+4. 设置时区，例如中国北京或美国纽约。
+5. 按需填写 Finnhub API Key。没有 Key 也可以先使用，部分实时行情和历史数据可能会受限。
+6. 如果要使用 IBKR Flex 在线同步，填写 Flex Token 和 Query ID。
+7. 如果已经有 Flex XML 文件，直接在 XML 导入模块选择文件并导入。
+8. 导入成功后，进入“资产总览”“持仓明细”“业绩分析”“交易明细”“持仓分析”查看数据。
+
+## 获取 IBKR Flex XML
+
+1. 登录 IBKR 网页端，进入：
+
+```text
+Performance & Reports -> Flex Queries -> Activity Flex Query
+```
+
+2. 如果还没有 Activity Flex Query 模板，点击右侧的 `+` 按钮新建一个。
+
+3. 在 `Sections (Select Multiple)` 页面中，建议把需要分析的 Section 都勾选。点击任意 Section 展开后，里面的子字段也需要勾选，可以使用页面里的 `Select All`。输出格式必须选择 `XML`。
+
+4. 配置 General Configuration。建议覆盖完整历史区间，并确保交易、现金流水、持仓、账户净值等字段完整。字段缺失会导致资产、持仓、交易或出入金数据不完整。
+
+5. 保存模板后，IBKR 会生成一个 Query ID。进入 Flex Web Service 页面，启用 Flex Web Service Status，页面中间的 Current Token 就是 Flex Token。
+
+6. 可以在 IBKR 页面直接运行查询并下载 XML 文件，也可以把 Query ID 和 Token 填入“设置与导入”中进行在线同步。
+
+对于年份较多的历史文件，建议按照自然年来导出 XML 文件。XML 文件保存在自己的电脑上，然后通过本项目导入。
+
+## 配置说明
+
+### 基础设置和同步
+
+- 基础币种用于资产总览展示。
+- 时区用于交易日期、现金流日期和定时任务展示。
+- 实时价格优先会尽量使用外部行情刷新展示价，外部行情不可用时回退到导入数据。
+- IBKR Flex Token 和 Query ID 用于在线同步；如果不配置，也可以只通过 XML 文件导入使用。
+
+### AI Provider
+
+进入“设置与导入”，在 AI 配置中选择 provider。
+
+- `openai`：填写 OpenAI API Key，后端通过 OpenAI 接口生成智能摘要和结构化分析。
+- `minimax`：填写 MiniMax API Key，后端调用 MiniMax OpenAI-compatible Chat Completions API。
+- `deepseek`：填写 DeepSeek API Key，用于结构化持仓分析和智能摘要。
 - `mock`：开发和测试用的本地模拟 provider，不会访问外部服务。
 
-如果 MiniMax key 误填在 OpenAI API Key 中，切换到 `minimax` 后后端会把 OpenAI Key 字段作为兼容兜底读取；推荐后续把它移动到 MiniMax API Key 字段，避免误用 `openai` provider 时打到 `https://api.openai.com/v1/responses` 后返回 401。
+持仓分析页默认读取结构化指标和已缓存的智能摘要，不会在每次进入页面时都同步请求外部模型。需要更新文案时，点击页面里的“刷新AI”；后端会触发后台刷新，并在成功后更新缓存。模型超时或失败不会阻塞持仓分析数据加载。
 
-MiniMax 有不同区域入口：中国区通常使用 `https://api.minimaxi.com/v1`，国际区文档常见 `https://api.minimax.io/v1`。如果出现 401，先确认 API Key 对应的区域，再调整设置页里的 MiniMax Base URL。
+### 行情源
 
-持仓分析页默认只读取结构化指标和当天已缓存的智能摘要，不会在每次进入板块时同步请求外部模型。需要更新文案时，在页面点击“刷新智能摘要”；后端会通过 `/api/portfolio-analysis/narrative/refresh` 触发后台刷新，并把当天成功结果写入内存缓存。MiniMax 或 OpenAI 慢响应、超时只会影响这次摘要刷新，不会阻塞持仓分析数据加载，也不会用超时错误覆盖当天可用缓存。
+推荐优先使用长桥 provider。它用于读取报价和日 K 线，不提供交易能力。
 
-### 长桥与 Futu OpenD 只读行情
-
-推荐优先使用长桥 provider。它通过 Codex 环境里的 `longbridge` CLI 读取报价和日 K 线，不需要本机安装或打开 Futu OpenD。
-
-进入“设置与导入 -> V2 分析集成”，把“行情 Provider”切换为“长桥”并保存。保存后可以测试长桥连通性：
+进入“设置与导入”，把行情 Provider 切换为“长桥”并保存。保存后可以测试长桥连通性：
 
 ```bash
 curl -X POST http://127.0.0.1:8085/api/settings/data-sources/longbridge/test \
@@ -161,7 +266,7 @@ curl -X POST http://127.0.0.1:8085/api/settings/data-sources/longbridge/test \
   -d '{"symbol":"AAPL","days":5}'
 ```
 
-也可以手动重拉持仓和核心市场指数的历史 K 线，结果会写入本地持久化缓存 `~/.cache/ibkr-dashboard/market-history.json`，后续总览和持仓分析会优先复用这些数据：
+也可以手动重拉持仓和核心市场指数的历史 K 线，结果会写入本地持久化缓存 `~/.cache/ibkr-dashboard/market-history.json`：
 
 ```bash
 curl -X POST http://127.0.0.1:8085/api/settings/data-sources/history/refresh \
@@ -181,8 +286,6 @@ curl -X POST http://127.0.0.1:8085/api/settings/data-sources/history/refresh \
 
 如果本机已经运行 Futu OpenD，也可以把行情 Provider 切换为“本地 OpenD”，并填写 host 和 port。默认 host 是 `127.0.0.1`，默认 port 是 `11111`。
 
-这些集成都只读取快照报价和日 K 线；当前版本不做期权操作，也不依赖期权行情。项目代码不包含交易、下单、撤单或解锁交易接口。
-
 保存设置后可以测试 OpenD：
 
 ```bash
@@ -191,14 +294,9 @@ curl -X POST http://127.0.0.1:8085/api/settings/data-sources/futu/test \
   -d '{"symbol":"AAPL"}'
 ```
 
-如果返回 `futu_api_package_not_installed`，先在后端环境安装依赖：
+这些行情集成都只读取快照报价和日 K 线。项目代码不包含交易、下单、撤单或解锁交易接口。
 
-```bash
-cd backend
-.venv/bin/python -m pip install -e .
-```
-
-### Telegram 命令与日报
+### Telegram
 
 Telegram 配置包含 Bot Token、白名单 Chat ID、日报开关和日报时间。多个 Chat ID 可以用逗号、空格或换行分隔。
 
@@ -240,9 +338,9 @@ curl -X POST http://127.0.0.1:8085/api/telegram/commands/dry-run \
 curl -X POST http://127.0.0.1:8085/api/telegram/reports/dry-run
 ```
 
-### Claude Desktop MCP 配置
+### MCP
 
-MCP server 是 stdio 进程，启动目录需要指向后端目录。下面示例使用本机 Python 虚拟环境；如果你使用 Docker 或其他 Python 路径，请替换 `command`。
+MCP server 是 stdio 进程，暴露只读工具给 Claude Desktop、Codex Desktop 等客户端。它可以读取本地持仓、风险摘要、市场分析和组合分析，不提供任何交易动作。
 
 Claude Desktop 的 macOS 配置文件通常在：
 
@@ -250,7 +348,7 @@ Claude Desktop 的 macOS 配置文件通常在：
 ~/Library/Application Support/Claude/claude_desktop_config.json
 ```
 
-加入：
+示例配置：
 
 ```json
 {
@@ -268,11 +366,7 @@ Claude Desktop 的 macOS 配置文件通常在：
 }
 ```
 
-保存后重启 Claude Desktop。MCP 工具是只读的，可列出持仓、读取风险摘要、读取市场/组合/个股分析，不提供任何交易动作。
-
-### Codex Desktop MCP 配置
-
-Codex Desktop / Codex CLI 使用 TOML 配置时，可以在 `~/.codex/config.toml` 加入同一个 stdio server：
+Codex Desktop / Codex CLI 使用 TOML 配置时，可以在 `~/.codex/config.toml` 加入：
 
 ```toml
 [mcp_servers.ibkr-dashboard]
@@ -285,8 +379,6 @@ ES_BACKEND = "http"
 ES_HOST = "http://127.0.0.1:9200"
 ```
 
-保存后重启 Codex Desktop，或重开 Codex 会话。不同安装版本如果提供图形化 MCP 配置入口，填入同样的 `command`、`args`、`cwd`、`env` 即可。
-
 如果只是开发烟测，不连接 Elasticsearch，可以临时使用：
 
 ```bash
@@ -294,85 +386,14 @@ cd backend
 ES_BACKEND=in_memory .venv/bin/python -m app.mcp_server --list-tools
 ```
 
-## 停止
-
-如果是用 `docker compose up` 启动的，在同一个终端窗口按：
-
-```text
-Ctrl + C
-```
-
-如果你想让它在后台运行，可以用：
-
-```bash
-docker compose up -d
-```
-
-后台运行时，停止命令是：
-
-```bash
-docker compose down
-```
-
-`docker compose down` 不会删除已经导入的数据和设置。只有运行下面这个命令才会清空本地数据库，请谨慎使用：
-
-```bash
-docker compose down -v
-```
-
-## 第一次使用
-
-1. 打开 `http://localhost:5176`。
-2. 进入“设置与导入”。
-3. 设置基础币种：`USD`、`HKD` 或 `RMB`。V1 中基础币种只影响资产总览，其他页面保持 XML 原始口径。
-4. 设置时区：中国北京或美国纽约。
-5. 按需填写 Finnhub API Key。没有 Key 也可以先使用，部分实时行情和历史数据可能会受限。
-6. 如果要使用 IBKR Flex 在线同步，填写 Flex Token 和 Query ID。
-7. 如果你已经有 Flex XML 文件，直接在 XML 导入模块选择文件并导入。
-8. 导入成功后，进入“资产总览”“持仓明细”“业绩分析”“交易明细”查看数据。
-
-## 如何获取 IBKR Flex XML
-
-1. 进入 Flex Queries 页面。
-
-登录 IB 网页端后，按下面路径点击菜单：
-
-```text
-Performance & Reports -> Flex Queries -> Activity Flex Query
-```
-
-2. 创建查询模板。
-
-如果你还没有 Activity Flex Query 模板，点击右侧的 `+` 按钮新建一个。
-
-3. 勾选 Sections。
-
-在 `Sections (Select Multiple)` 页面中，建议把所有 Section 都勾选。点击任意 Section 展开后，里面的每一项子字段也需要全部勾选，可以使用页面里的 `Select All`。输出格式必须选择 `XML`。
-
-如果字段缺失，导入后可能出现资产、持仓、交易或出入金数据不完整。
-
-4. 配置 General Configuration。
-
-具体如何配置请参考我的视频。小白用户可以把能勾的都勾选。
-
-5. 获取 Query ID 与 Token。
-
-保存模板后，IBKR 会生成一个 Query ID。然后进入 Flex Web Service 页面，勾选 Flex Web Service Status 启用服务。页面中间的 Current Token 会显示一长串数字，这就是你的 Token。
-
-6. 下载 XML 文件。
-
-配置完成后，点击运行查询。IBKR 会生成 XML 文件，点击下载并保存到本地。建议下载完整的历史区间（从开户日至今），这样本系统的业绩归因、持仓成本、交易排名等高级分析才会更准确。
-
-对于年份较多的历史文件，建议按照自然年来导出 XML 文件。
-
-XML 文件保存在你自己的电脑上，然后通过本项目的“设置与导入”页面导入。
-
 ## 数据和隐私
 
-- 真实 XML 文件不会被上传。
+- 真实 XML 文件不会被上传到第三方服务。
 - 应用数据默认保存在 Docker 的本地卷 `es_data` 中。
 - 删除容器不会删除数据；删除 Docker 卷才会清空数据。
-- IBKR Flex Token、Finnhub API Key 等凭据只应保存在本地设置中。
+- IBKR Flex Token、Finnhub API Key、AI Provider API Key、Telegram Bot Token 等凭据只应保存在本地设置中。
+- 不要把真实 XML、CSV、Excel、`.env`、API Key、Flex Token 或 Telegram Bot Token 提交到仓库。
+- 外部行情和 AI Provider 只用于读取市场数据或生成分析结果，不会触发账户交易。
 
 ## 常见问题
 
@@ -402,10 +423,15 @@ docker compose down
 
 ### 设置基础币种后，为什么其他页面没变
 
-这是 V1 的设计。为了避免跨页面币种换算造成口径不一致，基础币种只影响资产总览；持仓、交易、业绩等页面保留账户和 XML 的原始计价口径。
+为了避免跨页面币种换算造成口径不一致，基础币种主要影响资产总览；持仓、交易、业绩等页面保留账户和 XML 的原始计价口径。
+
+### AI 或行情不可用时页面还能用吗
+
+可以。资产、持仓、业绩和交易分析主要来自本地 Flex XML。外部行情和 AI 只增强分析结果；不可用时，页面会显示缺失、不可用或使用本地规则结果。
 
 ## 当前限制
 
-- 长期历史行情、基准历史数据和外部行情接口已经预留并接入缓存，但仍依赖公开数据源可用性和频率限制。
-- V2 个股分析已经接入统一持仓分析框架；如果外部行情、Futu OpenD、OpenAI 或 MiniMax 不可用，对应指标会显示为缺失或不可用。
-- Telegram 已提供后端只读命令、日报调度和 Bot API 发送层；真实 Bot Token、网络连通性和部署方式需要在运行环境中配置。
+- 长期历史行情、基准历史数据和外部行情接口依赖公开数据源可用性和频率限制。
+- 持仓分析中的外部行情、AI 摘要和市场情绪指标依赖对应 provider 的可用性。
+- Telegram 日报需要真实 Bot Token、网络连通性和运行环境支持。
+- MCP 工具只读，不支持也不计划支持交易动作。

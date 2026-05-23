@@ -12,26 +12,23 @@ import type {
   StandardMetric,
 } from "../../lib/contracts";
 import { asNumber, deltaClass, formatCurrency, formatNumber } from "../../lib/format";
-import { DataState, EmptyState, Field, LoadingBlock, MetricCard, PageHeader, StatusPill, Surface } from "../../components/Primitives";
+import { DataState, EmptyState, LoadingBlock, MetricCard, PageHeader, StatusPill, Surface } from "../../components/Primitives";
 import { EChart, baseGrid } from "../../components/charts/EChart";
 
 const tabs: Array<{ key: PortfolioAnalysisSectionKey; label: string }> = [
   { key: "market", label: "市场分析" },
   { key: "portfolio", label: "持仓分析" },
-  { key: "stock", label: "个股分析" },
 ];
 
 export function PortfolioAnalysisPage() {
-  const [section, setSection] = useState<PortfolioAnalysisSectionKey>("market");
-  const [symbol, setSymbol] = useState("");
-  const [activeSymbol, setActiveSymbol] = useState("");
+  const [section, setSection] = useState<PortfolioAnalysisSectionKey>("portfolio");
   const [state, setState] = useState<PageState<PortfolioAnalysisResponse>>({ data: null, loading: true, error: null });
+  const [aiRefreshing, setAiRefreshing] = useState(false);
   const responseCache = useRef<Map<string, PortfolioAnalysisResponse>>(new Map());
 
-  const load = useCallback(async (options?: { showLoading?: boolean; symbolOverride?: string; force?: boolean; skipCache?: boolean }) => {
+  const load = useCallback(async (options?: { showLoading?: boolean; force?: boolean; skipCache?: boolean }) => {
     const showLoading = options?.showLoading ?? true;
-    const requestSymbol = options?.symbolOverride ?? activeSymbol;
-    const cacheKey = `${section}:${section === "stock" ? requestSymbol || "" : ""}`;
+    const cacheKey = section;
     const cached = responseCache.current.get(cacheKey);
     if (cached && !options?.force && !options?.skipCache) {
       setState({ data: cached, loading: false, error: null });
@@ -39,19 +36,15 @@ export function PortfolioAnalysisPage() {
     }
     if (showLoading) setState((prev) => ({ ...prev, loading: true, error: null }));
     try {
-      const data = await api.portfolioAnalysis({ section, symbol: section === "stock" ? requestSymbol || undefined : undefined });
+      const data = await api.portfolioAnalysis({ section });
       responseCache.current.set(cacheKey, data);
       setState({ data, loading: false, error: null });
-      if (data.sections.stock.symbol) {
-        setSymbol((prev) => prev || data.sections.stock.symbol || "");
-        setActiveSymbol((prev) => prev || data.sections.stock.symbol || "");
-      }
       return data;
     } catch (error) {
       setState((prev) => ({ ...prev, loading: false, error: error instanceof Error ? error.message : "unknown error" }));
       return null;
     }
-  }, [activeSymbol, section]);
+  }, [section]);
 
   useEffect(() => {
     void load();
@@ -66,24 +59,25 @@ export function PortfolioAnalysisPage() {
     return () => window.clearTimeout(timer);
   }, [load, section, state.data?.sections.portfolio?.analysis_meta?.ai_overlay_status]);
 
-  useEffect(() => {
-    const stock = state.data?.sections.stock;
-    if (section !== "stock" || stock?.memo?.status !== "pending") return undefined;
-    const timer = window.setTimeout(() => {
-      void load({ showLoading: false, symbolOverride: stock.symbol || activeSymbol, skipCache: true });
-    }, 3500);
-    return () => window.clearTimeout(timer);
-  }, [activeSymbol, load, section, state.data?.sections.stock?.memo?.status, state.data?.sections.stock?.symbol]);
+  const refreshAI = useCallback(async () => {
+    setAiRefreshing(true);
+    try {
+      await api.refreshPortfolioAnalysisNarrative({ section });
+      window.setTimeout(() => {
+        void load({ showLoading: false, skipCache: true });
+      }, 800);
+      window.setTimeout(() => {
+        void load({ showLoading: false, skipCache: true }).finally(() => setAiRefreshing(false));
+      }, 6000);
+    } catch (error) {
+      setAiRefreshing(false);
+      setState((prev) => ({ ...prev, error: error instanceof Error ? error.message : "unknown error" }));
+    }
+  }, [load, section]);
 
-  const runStockQuery = (nextSymbol?: string) => {
-    const targetSymbol = (nextSymbol ?? symbol).trim().toUpperCase();
-    setSymbol(targetSymbol);
-    setActiveSymbol(targetSymbol);
-    void load({ symbolOverride: targetSymbol, force: true });
-  };
-  const selectedCacheKey = `${section}:${section === "stock" ? activeSymbol || "" : ""}`;
+  const selectedCacheKey = section;
   const cachedData = responseCache.current.get(selectedCacheKey) ?? null;
-  const currentData = responseMatchesCurrentRequest(state.data, section, activeSymbol)
+  const currentData = responseMatchesCurrentRequest(state.data, section)
     ? state.data
     : cachedData;
   const blockingLoading = state.loading && !currentData;
@@ -95,13 +89,14 @@ export function PortfolioAnalysisPage() {
       data={currentData}
       loading={blockingLoading}
       reload={() => void load({ force: true })}
+      refreshAI={() => void refreshAI()}
+      aiRefreshing={aiRefreshing}
     >
       <DataState loading={blockingLoading} error={state.error} data={currentData} onRetry={load}>
         {(data) => (
           <>
             {section === "market" ? <MarketPanel data={data} /> : null}
             {section === "portfolio" ? <PortfolioPanel data={data} /> : null}
-            {section === "stock" ? <StockPanel data={data} symbol={symbol} onSymbolChange={runStockQuery} /> : null}
           </>
         )}
       </DataState>
@@ -115,6 +110,8 @@ function PortfolioAnalysisShell({
   data,
   loading,
   reload,
+  refreshAI,
+  aiRefreshing,
   children,
 }: {
   section: PortfolioAnalysisSectionKey;
@@ -122,20 +119,25 @@ function PortfolioAnalysisShell({
   data: PortfolioAnalysisResponse | null;
   loading: boolean;
   reload: () => void;
+  refreshAI: () => void;
+  aiRefreshing: boolean;
   children: ReactNode;
 }) {
+  const aiPill = sectionAiPill(data, section, aiRefreshing);
+  const aiBusy = aiRefreshing || aiPill.label === "AI生成中";
   return (
     <>
       <PageHeader
         eyebrow="V2 / 持仓智能"
         title="持仓分析"
-        description="市场、组合和个股三段式只读分析；缺失外部数据时显示明确来源状态。"
         meta={
           <>
             <StatusPill tone={data?.status === "ready" ? "positive" : "neutral"}>{data ? statusLabel(data.status) : "加载中"}</StatusPill>
             <StatusPill>{data?.display_currency ?? "-"}</StatusPill>
+            <StatusPill tone={aiPill.tone}>{aiPill.label}</StatusPill>
             {loading ? <StatusPill tone="neutral">正在加载</StatusPill> : null}
             <button type="button" onClick={reload} disabled={loading}>{loading ? "刷新中" : "刷新数据"}</button>
+            <button type="button" onClick={refreshAI} disabled={loading || aiBusy}>{aiBusy ? aiPill.label : "刷新AI"}</button>
           </>
         }
       />
@@ -154,7 +156,7 @@ function PortfolioAnalysisShell({
       </div>
 
       {loading && !data ? (
-        <LoadingBlock label={section === "portfolio" ? "正在生成持仓分析，包含结构化AI判断和风险图表" : "正在读取持仓分析数据"} />
+        <LoadingBlock label="正在读取持仓分析数据" />
       ) : children}
     </>
   );
@@ -163,14 +165,34 @@ function PortfolioAnalysisShell({
 function responseMatchesCurrentRequest(
   data: PortfolioAnalysisResponse | null,
   section: PortfolioAnalysisSectionKey,
-  activeSymbol: string,
 ): data is PortfolioAnalysisResponse {
   if (!data) return false;
   const responseSection = data.request?.section ?? data.active_section ?? null;
   if (responseSection && responseSection !== section) return false;
-  if (section !== "stock") return true;
-  const requested = activeSymbol.trim().toUpperCase();
-  return !requested || data.request?.symbol === requested || data.sections.stock.symbol === requested;
+  return true;
+}
+
+function sectionAiPill(
+  data: PortfolioAnalysisResponse | null,
+  section: PortfolioAnalysisSectionKey,
+  refreshing: boolean,
+): { label: string; tone: "neutral" | "positive" | "negative" | "accent" } {
+  if (refreshing) return { label: "AI刷新中", tone: "accent" };
+  if (!data) return { label: "AI待加载", tone: "neutral" };
+  if (section === "portfolio") {
+    const meta = data.sections.portfolio.analysis_meta ?? {};
+    const status = recordText(meta, "ai_overlay_status", "unavailable");
+    const provider = recordText(meta, "ai_overlay_provider", "");
+    const reason = recordText(meta, "ai_overlay_reason", "");
+    const localFallback = provider === "local_rules" || reason.startsWith("fallback_after_");
+    if (status === "ready" && !localFallback) return { label: `${aiProviderLabel(provider)} 已覆盖`, tone: "positive" };
+    if (status === "pending") return { label: "AI生成中", tone: "accent" };
+    return { label: aiFallbackLabel(reason), tone: "negative" };
+  }
+  const narrative = data.sections.market.narrative;
+  if (narrative.status === "ready" && narrative.provider !== "mock") return { label: `${aiProviderLabel(narrative.provider)} 已覆盖`, tone: "positive" };
+  if (narrative.status === "pending") return { label: "AI生成中", tone: "accent" };
+  return { label: aiFallbackLabel(narrative.reason ?? ""), tone: narrative.provider === "mock" ? "accent" : "negative" };
 }
 
 function MarketPanel({ data }: { data: PortfolioAnalysisResponse }) {
@@ -178,31 +200,40 @@ function MarketPanel({ data }: { data: PortfolioAnalysisResponse }) {
   const strategy = market.strategy ?? [];
   const strategySummary = strategy[0] ?? {};
   const pulse = market.market_pulse ?? [];
+  const dateText = new Date().toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit", weekday: "short" });
   return (
-    <div className="market-pulse-page">
+    <div className="market-pulse-page market-workbench">
       <section className="market-pulse-hero">
         <div>
           <span className="market-pulse-kicker">每日市场脉搏</span>
-          <h2>今日美股情绪观察</h2>
-          <p>优先使用 CNN Fear & Greed、长桥市场温度、长桥社区热度和富途OpenD行情代理；不可用时才回退到本地规则。</p>
+          <h2>{String(market.regime.value ?? "待判断")}</h2>
         </div>
         <div className="market-pulse-hero__meta">
           <StatusPill tone={market.status === "ready" ? "positive" : "neutral"}>{statusLabel(market.status)}</StatusPill>
-          <StatusPill tone="accent">{String(market.regime.value ?? "待判断")}</StatusPill>
-          <span>{new Date().toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", weekday: "short" })}</span>
+          <span>{dateText}</span>
         </div>
       </section>
 
-      <section className={`market-today-brief market-today-brief--${recordText(strategySummary, "tone", "neutral")}`}>
-        <div className="market-today-brief__headline">
-          <span>今日市场</span>
-          <strong>{marketTodaySummary(market, strategySummary)}</strong>
-        </div>
-        <div className="market-today-brief__columns">
-          <InsightList title="对当前组合的影响" items={market.portfolio_impact} compact />
-          <InsightList title="机会 / 风险" items={[...market.opportunities, ...market.risks]} compact />
-        </div>
-      </section>
+      <MarketKpis market={market} />
+
+      <div className="market-brief-grid">
+        <section className={`market-today-brief market-today-brief--${recordText(strategySummary, "tone", "neutral")}`}>
+          <div className="market-today-brief__headline">
+            <span>今日市场</span>
+            <strong>{marketTodaySummary(market, strategySummary)}</strong>
+          </div>
+        </section>
+
+        <section className="market-side-brief">
+          <InsightList title="组合影响" items={market.portfolio_impact.slice(0, 3)} compact />
+          <InsightList title="机会 / 风险" items={[...market.opportunities, ...market.risks].slice(0, 3)} compact />
+          {market.watch_symbols.length ? (
+            <div className="market-watch-strip">
+              {market.watch_symbols.slice(0, 6).map((symbol) => <span key={symbol}>{symbol}</span>)}
+            </div>
+          ) : null}
+        </section>
+      </div>
 
       <div className="market-pulse-grid">
         {pulse.length ? pulse.map((item) => <MarketPulseCard key={recordText(item, "key", recordText(item, "title", ""))} item={item} />) : (
@@ -212,6 +243,43 @@ function MarketPanel({ data }: { data: PortfolioAnalysisResponse }) {
 
     </div>
   );
+}
+
+function MarketKpis({ market }: { market: PortfolioAnalysisResponse["sections"]["market"] }) {
+  const items = [
+    { icon: "radar", label: "市场状态", value: String(market.regime.value ?? "-"), tone: market.regime.status === "ready" ? "accent" : "neutral" },
+    { icon: "target", label: "RSI", value: marketMetricValue(market.indicators.rsi), tone: metricNumber(market.indicators.rsi) >= 70 ? "negative" : metricNumber(market.indicators.rsi) <= 35 ? "positive" : "neutral" },
+    { icon: "spark", label: "恐惧贪婪", value: marketMetricValue(market.indicators.fear_greed ?? market.indicators.cnn_fear_greed), tone: "accent" },
+    { icon: "alert", label: "VIX", value: marketMetricValue(market.indicators.vix), tone: metricNumber(market.indicators.vix) >= 25 ? "negative" : "positive" },
+    { icon: "database", label: "上涨广度", value: marketMetricValue(market.indicators.breadth), tone: metricNumber(market.indicators.breadth) >= 50 ? "positive" : "negative" },
+    { icon: "compass", label: "组合日变", value: marketMetricValue(market.indicators.portfolio_weighted_change), tone: metricNumber(market.indicators.portfolio_weighted_change) >= 0 ? "positive" : "negative" },
+  ];
+  return (
+    <div className="market-kpi-strip">
+      {items.map((item) => (
+        <div className={`market-kpi market-kpi--${item.tone}`} key={item.label}>
+          <div>
+            <AnalysisIcon name={item.icon} />
+            <span>{item.label}</span>
+          </div>
+          <strong>{item.value}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function marketMetricValue(metric: StandardMetric | undefined): string {
+  if (!metric || metric.value === null || metric.value === undefined || metric.value === "") return "-";
+  if (typeof metric.value === "string") return metric.value;
+  const value = formatNumber(Number(metric.value));
+  if (metric.unit === "percent") return `${value}%`;
+  return value;
+}
+
+function metricNumber(metric: StandardMetric | undefined): number {
+  const value = Number(metric?.value);
+  return Number.isFinite(value) ? value : 0;
 }
 
 function marketTodaySummary(market: PortfolioAnalysisResponse["sections"]["market"], strategy: ApiRecord): string {
@@ -237,117 +305,60 @@ function PortfolioPanel({ data }: { data: PortfolioAnalysisResponse }) {
   const priorityAlerts = (portfolio.alerts ?? []).filter((alert) => ["high", "medium"].includes(recordText(alert, "severity", "low")));
   const chart = portfolio.charts.slice(0, 1);
   return (
-    <div className="analysis-layout">
-      <Surface title="组合风险" subtitle="只展示需要优先处理的集中度和主题风险。">
-        <RiskAlertSummary alerts={priorityAlerts} />
-      </Surface>
+    <div className="analysis-layout portfolio-workbench">
+      <PortfolioRiskKpis portfolio={portfolio} />
 
-      <Surface title="持仓风险分析" subtitle="逐项校验当前持仓的AI主题关联、逻辑状态和只读分析建议。">
+      <div className="portfolio-workbench__top">
+        <Surface title="组合风险" className="portfolio-analysis-surface">
+          <RiskAlertSummary alerts={priorityAlerts} />
+        </Surface>
+
+        <Surface title="风险图表" className="portfolio-analysis-surface portfolio-chart-surface">
+          <ChartGrid charts={chart} currency={data.display_currency} />
+        </Surface>
+      </div>
+
+      <Surface title="持仓风险分析" className="portfolio-analysis-surface">
         <PortfolioAIStatus portfolio={portfolio} />
         <PortfolioRiskTable rows={portfolio.risk_rows ?? []} currency={data.display_currency} />
         <AnalysisMeta meta={portfolio.analysis_meta} />
-        <div className="portfolio-risk-chart">
-          <ChartGrid charts={chart} currency={data.display_currency} />
-        </div>
       </Surface>
 
-      <Surface title="调仓建议" subtitle="只读分析建议，不包含交易执行或下单数量。">
+      <Surface title="调仓建议" className="portfolio-analysis-surface">
         <RebalanceAdvicePanel advice={portfolio.rebalance_advice} />
       </Surface>
     </div>
   );
 }
 
-function StockPanel({
-  data,
-  symbol,
-  onSymbolChange,
-}: {
-  data: PortfolioAnalysisResponse;
-  symbol: string;
-  onSymbolChange: (symbol: string) => void;
-}) {
-  const stock = data.sections.stock;
-  const memo = stock.memo;
-  const options = stock.available_symbols ?? [];
-  const selectedSymbol = stock.symbol || symbol || options[0]?.symbol || "";
+function PortfolioRiskKpis({ portfolio }: { portfolio: PortfolioAnalysisResponse["sections"]["portfolio"] }) {
+  const alerts = portfolio.alerts ?? [];
+  const rows = portfolio.risk_rows ?? [];
+  const high = alerts.filter((alert) => recordText(alert, "severity", "low") === "high").length;
+  const medium = alerts.filter((alert) => recordText(alert, "severity", "low") === "medium").length;
+  const maxWeight = rows.reduce((max, row) => Math.max(max, row.weight_pct ?? 0), 0);
+  const aiReady = rows.filter((row) => isModelAiSource(String(row.source ?? ""))).length;
+  const aiCoverage = rows.length ? aiReady / rows.length * 100 : null;
+  const meta = portfolio.analysis_meta ?? {};
+  const externalReady = recordBool(meta, "external_ready");
+  const items = [
+    { icon: "alert", label: "高优先级风险", value: formatNumber(high, 0), tone: high > 0 ? "negative" : "positive" },
+    { icon: "radar", label: "中优先级风险", value: formatNumber(medium, 0), tone: medium > 0 ? "accent" : "positive" },
+    { icon: "target", label: "最大单票权重", value: rows.length ? `${formatNumber(maxWeight)}%` : "-", tone: maxWeight >= 25 ? "negative" : maxWeight >= 15 ? "accent" : "neutral" },
+    { icon: "spark", label: "模型覆盖", value: aiCoverage === null ? "-" : `${formatNumber(aiCoverage, 0)}%`, tone: aiCoverage && aiCoverage >= 80 ? "positive" : "neutral" },
+    { icon: "database", label: "外部数据", value: externalReady ? "可用" : "部分可用", tone: externalReady ? "positive" : "accent" },
+  ];
   return (
-    <div className="analysis-layout">
-      <Surface
-        title="个股选择"
-        subtitle="只能选择当前持仓中的股票。"
-      >
-        {options.length ? (
-          <div className="stock-select-control">
-            <Field label="股票代码">
-              <select value={selectedSymbol} onChange={(event) => onSymbolChange(event.target.value)}>
-                {options.map((item) => (
-                  <option key={item.symbol} value={item.symbol}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </Field>
+    <div className="portfolio-kpi-strip">
+      {items.map((item) => (
+        <div className={`portfolio-kpi-card portfolio-kpi-card--${item.tone}`} key={item.label}>
+          <div>
+            <AnalysisIcon name={item.icon} />
+            <span>{item.label}</span>
           </div>
-        ) : (
-          <EmptyState title="暂无持仓股票" detail="导入最新 Flex XML 后，这里会显示可分析的当前持仓。" compact />
-        )}
-      </Surface>
-
-      <Surface title={`${memo.symbol || selectedSymbol || "-"} 个股分析`} subtitle="围绕当前持仓逻辑生成，只读且不包含交易执行指令。">
-        <StockMemo memo={memo} />
-      </Surface>
-    </div>
-  );
-}
-
-function StockMemo({ memo }: { memo: PortfolioAnalysisResponse["sections"]["stock"]["memo"] }) {
-  if (memo.status === "pending") {
-    return <LoadingBlock label="正在生成个股分析" />;
-  }
-  if (memo.status !== "ready") {
-    return <EmptyState title="个股分析不可用" detail={memo.reason || "当前没有可用于分析的持仓数据。"} compact />;
-  }
-  return (
-    <div className="stock-memo">
-      <div className="stock-memo__summary">
-        <strong>{memo.one_line_view || "暂无结论"}</strong>
-        <div>
-          <StatusPill tone="accent">{memo.position_role || "待复核仓"}</StatusPill>
-          <StatusPill tone={memo.logic_status === "削弱" ? "negative" : memo.logic_status === "增强" ? "positive" : "neutral"}>
-            逻辑{memo.logic_status || "无法判断"}
-          </StatusPill>
-          <StatusPill>AI关联 {memo.ai_relevance || "无法判断"}</StatusPill>
+          <strong>{item.value}</strong>
         </div>
-      </div>
-
-      <div className="stock-memo__grid">
-        <MemoList title="持仓逻辑" items={memo.holding_thesis} />
-        <MemoList title="事实" items={memo.facts} />
-        <MemoList title="推断" items={memo.inferences} />
-        <MemoList title="组合影响" items={memo.portfolio_impact} />
-        <MemoList title="主要风险" items={memo.key_risks} />
-        <MemoList title="继续验证" items={memo.tracking_questions} />
-      </div>
-
-      <MemoList title="逻辑失效信号" items={memo.invalidation_signals} />
-      {memo.read_only_suggestion ? <p className="stock-memo__suggestion">{memo.read_only_suggestion}</p> : null}
-      <p className="analysis-meta-line">
-        <span>{sourceLabel(memo.source)}</span>
-        <span>置信度 {Math.round((memo.confidence ?? 0) * 100)}%</span>
-      </p>
-    </div>
-  );
-}
-
-function MemoList({ title, items }: { title: string; items: string[] }) {
-  if (!items.length) return null;
-  return (
-    <div className="stock-memo__list">
-      <strong>{title}</strong>
-      <ul>
-        {items.map((item) => <li key={item}>{item}</li>)}
-      </ul>
+      ))}
     </div>
   );
 }
@@ -479,7 +490,7 @@ function RiskAlertSummary({ alerts }: { alerts: ApiRecord[] }) {
     <div className="risk-summary-list">
       {alerts.map((alert, index) => (
         <div className={`risk-summary risk-summary--${recordText(alert, "severity", "medium")}`} key={`${recordText(alert, "title", "alert")}-${index}`}>
-          <span>{severityLabel(recordText(alert, "severity", "medium"))}</span>
+          <span><AnalysisIcon name={recordText(alert, "severity", "medium") === "high" ? "alert" : "radar"} />{severityLabel(recordText(alert, "severity", "medium"))}</span>
           <strong>{recordText(alert, "title", "风险提示")}</strong>
           <p>{recordText(alert, "detail", "")}</p>
         </div>
@@ -546,7 +557,7 @@ function PortfolioAIStatus({ portfolio }: { portfolio: PortfolioAnalysisResponse
   const rowSources = (portfolio.risk_rows ?? []).map((row) => row.source).join("+");
   const adviceSource = portfolio.rebalance_advice?.source ?? "";
   const combinedSource = `${rowSources}+${adviceSource}`;
-  const inferredReady = combinedSource.includes("structured_ai");
+  const inferredReady = isModelAiSource(combinedSource);
   const inferredRules = combinedSource.includes("portfolio_ai_rules");
   const status = recordText(meta, "ai_overlay_status", inferredReady ? "ready" : inferredRules ? "unavailable" : "missing_data");
   const provider = recordText(meta, "ai_overlay_provider", providerFromSource(combinedSource));
@@ -580,32 +591,56 @@ function RebalanceAdvicePanel({ advice }: { advice: PortfolioAnalysisResponse["s
       <div className="rebalance-card-grid">
         {cards.slice(0, 4).map((card, index) => (
           <article className="rebalance-card" key={`${recordText(card, "title", "card")}-${index}`}>
-            <span>{recordText(card, "rank", `0${index + 1}`)}</span>
-            <strong>{recordText(card, "title", "-")}</strong>
+            <div className="rebalance-card__top">
+              <span>{normalizeAdviceRank(recordText(card, "rank", `0${index + 1}`), index)}</span>
+              <AnalysisIcon name={recordText(card, "icon", adviceIconForIndex(index))} />
+            </div>
+            <strong>{recordText(card, "title", adviceTitleForIndex(index))}</strong>
             <p>{recordText(card, "body", "-")}</p>
           </article>
         ))}
       </div>
-      <div className="rebalance-advice__body">
-        {advice.action_today ? <AdviceParagraph title="今日最需要行动的事" body={advice.action_today} /> : null}
-        {advice.thinking_prompt ? <AdviceParagraph title="一个需要认真思考的问题" body={advice.thinking_prompt} /> : null}
-        {advice.market_note ? <AdviceParagraph title="市场环境提示" body={advice.market_note} /> : null}
-        {advice.optimal_structure ? <AdviceParagraph title="当前最优交易结构" body={advice.optimal_structure} /> : null}
-        {advice.invalidation ? <AdviceParagraph title="失效条件" body={advice.invalidation} /> : null}
+      <div className="rebalance-command-strip">
+        <AnalysisIcon name="check" />
+        <strong>{advice.action_today || "先核实证据，不生成交易动作。"}</strong>
+        {advice.thinking_prompt ? <span>{advice.thinking_prompt}</span> : null}
       </div>
-      <p className="analysis-meta-line">
-        {sourceLabel(advice.source)} · 置信度 {Math.round((advice.confidence ?? 0) * 100)}%{advice.as_of ? ` · ${advice.as_of}` : ""}
+      <p className="rebalance-footer-line">
+        只读分析 · 不包含下单动作 · {sourceLabel(advice.source)} · 置信度 {Math.round((advice.confidence ?? 0) * 100)}%{advice.as_of ? ` · ${advice.as_of}` : ""}
       </p>
     </div>
   );
 }
 
-function AdviceParagraph({ title, body }: { title: string; body: string }) {
+function normalizeAdviceRank(rank: string, index: number): string {
+  const digits = rank.replace(/\D/g, "");
+  return digits ? digits.padStart(2, "0").slice(-2) : `0${index + 1}`;
+}
+
+function adviceIconForIndex(index: number): string {
+  return ["compass", "search", "alert", "calendar"][index] ?? "check";
+}
+
+function adviceTitleForIndex(index: number): string {
+  return ["研究方向", "低估线索", "拥挤风险", "近期催化"][index] ?? "建议";
+}
+
+function AnalysisIcon({ name }: { name: string }) {
+  const paths: Record<string, ReactNode> = {
+    alert: <><path d="M12 3 2.8 19h18.4L12 3Z" /><path d="M12 8v5" /><path d="M12 16h.01" /></>,
+    radar: <><circle cx="12" cy="12" r="8" /><path d="M12 4v8l5 3" /><path d="M4 12h16" /></>,
+    target: <><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3" /></>,
+    spark: <><path d="M12 2l1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8L12 2Z" /><path d="M18 16l.8 2.4L21 19l-2.2.6L18 22l-.8-2.4L15 19l2.2-.6L18 16Z" /></>,
+    database: <><ellipse cx="12" cy="5" rx="7" ry="3" /><path d="M5 5v6c0 1.7 3.1 3 7 3s7-1.3 7-3V5" /><path d="M5 11v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6" /></>,
+    compass: <><circle cx="12" cy="12" r="9" /><path d="m15.5 8.5-2.2 4.8-4.8 2.2 2.2-4.8 4.8-2.2Z" /></>,
+    search: <><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4 4" /></>,
+    calendar: <><rect x="4" y="5" width="16" height="15" rx="2" /><path d="M8 3v4M16 3v4M4 10h16" /></>,
+    check: <><circle cx="12" cy="12" r="9" /><path d="m8 12 2.5 2.5L16 9" /></>,
+  };
   return (
-    <section>
-      <h3>{title}</h3>
-      <p>{body}</p>
-    </section>
+    <svg className="analysis-icon" viewBox="0 0 24 24" aria-hidden="true">
+      {paths[name] ?? paths.check}
+    </svg>
   );
 }
 
@@ -615,10 +650,11 @@ function AnalysisMeta({ meta }: { meta: ApiRecord }) {
   const overlayStatus = recordText(meta, "ai_overlay_status", "unavailable");
   const overlayProvider = recordText(meta, "ai_overlay_provider", "");
   const overlayReason = recordText(meta, "ai_overlay_reason", "");
+  const localFallback = overlayProvider === "local_rules" || overlayReason.startsWith("fallback_after_");
   return (
-    <div className={`analysis-meta-line analysis-meta-line--${overlayStatus === "ready" ? "ai-ready" : "ai-fallback"}`}>
+    <div className={`analysis-meta-line analysis-meta-line--${overlayStatus === "ready" && !localFallback ? "ai-ready" : "ai-fallback"}`}>
       <span>
-        {overlayStatus === "ready"
+        {overlayStatus === "ready" && !localFallback
           ? `AI判断：${aiProviderLabel(overlayProvider)} 结构化输出`
           : `AI判断：${aiFallbackLabel(overlayReason)}，当前显示本地规则校验`}
       </span>
@@ -878,8 +914,9 @@ function metricHint(metric: StandardMetric): string {
 
 function sourceLabel(source: string): string {
   if (!source) return "未注明";
-  if (source.includes("structured_ai")) return "结构化模型分析";
-  if (source.includes("portfolio_ai_rules")) return "本地规则校验";
+  if (source.includes("local_rules_structured_ai") || source.includes("portfolio_ai_rules")) return "本地规则校验";
+  if (source.includes("mock_structured_ai") || source.includes("mock")) return "本地模拟";
+  if (isModelAiSource(source)) return "结构化模型分析";
   if (source.includes("portfolio_positions")) return "当前持仓快照";
   if (source.includes("portfolio_theme_proxy")) return "持仓主题代理";
   if (source.includes("market_data_provider")) return "行情数据提供方";
@@ -894,15 +931,20 @@ function sourceLabel(source: string): string {
   if (source.includes("yahoo")) return "雅虎行情";
   if (source.includes("finnhub")) return "Finnhub 行情";
   if (source.includes("nasdaq")) return "纳斯达克行情";
-  if (source.includes("mock")) return "本地模拟";
   if (source.includes("openai")) return "OpenAI";
   if (source.includes("minimax")) return "MiniMax";
+  if (source.includes("deepseek")) return "DeepSeek";
   return "本地规则";
+}
+
+function isModelAiSource(source: string): boolean {
+  return source.includes("openai_structured_ai") || source.includes("minimax_structured_ai") || source.includes("deepseek_structured_ai");
 }
 
 function aiProviderLabel(provider: string): string {
   if (provider === "openai") return "OpenAI";
   if (provider === "minimax") return "MiniMax";
+  if (provider === "deepseek") return "DeepSeek";
   if (provider === "mock") return "Mock AI";
   if (provider === "local_rules") return "本地规则";
   return provider || "模型";
@@ -913,6 +955,7 @@ function aiFallbackLabel(reason: string): string {
   if (reason.includes("429") || reason.toLowerCase().includes("too many requests")) return "OpenAI 限流或额度不足";
   if (reason.includes("api_key_not_configured")) return "模型密钥未配置";
   if (reason.includes("timed_out")) return "模型调用超时";
+  if (reason.includes("manual_refresh")) return "等待手动刷新AI";
   if (reason.includes("failed")) return "模型生成失败";
   if (reason.includes("does_not_support")) return "当前 provider 不支持结构化输出";
   if (reason.includes("missing_from_response")) return "后端未返回结构化AI状态";
@@ -923,6 +966,7 @@ function aiFallbackLabel(reason: string): string {
 function providerFromSource(source: string): string {
   if (source.includes("openai")) return "openai";
   if (source.includes("minimax")) return "minimax";
+  if (source.includes("deepseek")) return "deepseek";
   if (source.includes("mock")) return "mock";
   return "";
 }

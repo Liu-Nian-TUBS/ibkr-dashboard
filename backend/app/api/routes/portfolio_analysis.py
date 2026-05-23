@@ -67,7 +67,11 @@ def refresh_portfolio_analysis_narrative(
 ) -> dict[str, object]:
     normalized_symbol = symbol.upper() if symbol else None
     service = _build_service()
-    resolved_symbol = service.mark_narrative_refresh_started(section=section, symbol=normalized_symbol)
+    resolved_symbol = (
+        None
+        if section == PortfolioAnalysisSectionKey.PORTFOLIO
+        else service.mark_narrative_refresh_started(section=section, symbol=normalized_symbol)
+    )
     Thread(target=_refresh_narrative_task, args=(section, resolved_symbol), daemon=True).start()
     return {
         "status": "accepted",

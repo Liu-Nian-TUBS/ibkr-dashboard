@@ -1,13 +1,19 @@
-from typing import Protocol
+from collections.abc import Callable
+from threading import Event, Lock, Thread
+from typing import Any, Protocol
 
 import httpx
 
 from app.api.portfolio_analysis_contracts import PortfolioAnalysisSectionKey
+from app.services.ai_narrative_service import build_ai_provider
+from app.services.market_data_provider import MarketDataProvider
 from app.services.portfolio_analysis_service import PortfolioAnalysisService
 from app.services.settings_service import SettingsService
 
 
 class TelegramHttpClient(Protocol):
+    def get(self, url: str, *, params: dict[str, object], timeout: float) -> httpx.Response: ...
+
     def post(self, url: str, *, json: dict[str, object], timeout: float) -> httpx.Response: ...
 
 
@@ -43,17 +49,20 @@ class TelegramCommandService:
         settings_service: SettingsService,
         analysis_service: PortfolioAnalysisService,
         raw_repository: object | None = None,
+        market_data_provider: MarketDataProvider | None = None,
     ) -> None:
         self._settings_service = settings_service
         self._analysis_service = analysis_service
         self._raw_repository = raw_repository
+        self._market_data_provider = market_data_provider
 
     def handle_command(self, *, chat_id: str, text: str) -> dict[str, object]:
         settings = self._settings_service.get()
         normalized_chat_id = str(chat_id).strip()
         if normalized_chat_id not in settings.telegram_allowlisted_chat_ids:
             return {"ok": False, "status": "forbidden", "message": "该会话不在允许列表中"}
-        command = text.strip().split()[0].lower() if text.strip() else ""
+        normalized_text = text.strip()
+        command = _normalize_command(normalized_text)
         if command in {"/overview", "/summary"}:
             return {"ok": True, "status": "ready", "message": self._overview_message()}
         if command == "/positions":
@@ -82,7 +91,13 @@ class TelegramCommandService:
         if command == "/report":
             message, status = self.build_daily_report_message()
             return {"ok": True, "status": status, "message": message}
-        return {"ok": False, "status": "unsupported_command", "message": "暂不支持该只读命令"}
+        if normalized_text and not normalized_text.startswith("/") and _ai_is_configured(settings):
+            return self._ai_question_message(question=normalized_text)
+        return {
+            "ok": False,
+            "status": "unsupported_command",
+            "message": "暂不支持该只读命令。可用命令：/summary、/positions、/risk、/cash、/market、/report；配置 AI 后也可以直接发送中文问题。",
+        }
 
     def build_daily_report_message(self) -> tuple[str, str]:
         analysis = self._analysis_service.get_analysis()
@@ -145,12 +160,483 @@ class TelegramCommandService:
         total = sum(_to_float(row.get("amount")) for row in rows)
         return f"现金流记录数={len(rows)}，合计={round(total, 2)}"
 
+    def _ai_question_message(self, *, question: str) -> dict[str, object]:
+        settings = self._settings_service.get()
+        provider = build_ai_provider(
+            provider_name=settings.ai_provider,
+            openai_api_key=settings.openai_api_key,
+            ai_model=settings.ai_model,
+            minimax_api_key=settings.minimax_api_key,
+            minimax_base_url=settings.minimax_base_url,
+            deepseek_api_key=settings.deepseek_api_key,
+            deepseek_base_url=settings.deepseek_base_url,
+        )
+        metrics = self._telegram_question_context(question=question)
+        narrative = provider.generate(section="telegram_question", metrics=metrics)
+        narrative_status = _status_value(getattr(narrative, "status", "error"))
+        if narrative_status != "ready":
+            return {
+                "ok": False,
+                "status": narrative_status,
+                "message": f"AI 问答暂不可用：{narrative.reason or '模型未返回可用结果'}",
+            }
+        parts = [narrative.summary.strip()]
+        parts.extend(f"- {item}" for item in narrative.bullets if item)
+        if narrative.risks:
+            parts.append("风险/不确定性：" + "；".join(narrative.risks[:3]))
+        return {
+            "ok": True,
+            "status": "ready",
+            "message": "\n".join(part for part in parts if part).strip(),
+            "provider": narrative.provider,
+            "model": narrative.model,
+        }
+
+    def _telegram_question_context(self, *, question: str) -> dict[str, Any]:
+        context: dict[str, Any] = {
+            "user_question": question,
+            "read_only_boundary": "只能基于本地持仓、账户和分析指标回答，不提供下单、撤单、改单或交易执行建议。",
+            "overview_message": self._overview_message(),
+            "positions_message": self._positions_message(),
+            "cashflow_message": self._cashflow_message(),
+        }
+        try:
+            portfolio = self._analysis_service.get_analysis(section=PortfolioAnalysisSectionKey.PORTFOLIO)
+            context["portfolio_status"] = portfolio.sections.portfolio.status.value
+            context["portfolio_concentration"] = {
+                key: {
+                    "value": metric.value,
+                    "unit": metric.unit,
+                    "status": metric.status.value,
+                }
+                for key, metric in portfolio.sections.portfolio.concentration.items()
+            }
+        except Exception:
+            context["portfolio_status"] = "unavailable"
+        if self._raw_repository is not None:
+            context["top_positions"] = _top_position_context(self._raw_repository, limit=8)
+            context["price_history"] = self._price_history_context(context["top_positions"])
+        return context
+
+    def _price_history_context(self, positions: object) -> list[dict[str, Any]]:
+        if not isinstance(positions, list):
+            return []
+        symbols = [
+            str(row.get("symbol") or "").upper()
+            for row in positions
+            if isinstance(row, dict) and str(row.get("symbol") or "").strip()
+        ]
+        results = []
+        for symbol in list(dict.fromkeys(symbols))[:5]:
+            cached_points = _cached_price_history(self._raw_repository, symbol=symbol, limit=30)
+            provider_points = []
+            if self._market_data_provider is not None:
+                try:
+                    provider_points = [
+                        {
+                            "date": point.date,
+                            "close": point.close,
+                            "source": point.source,
+                        }
+                        for point in self._market_data_provider.get_kline_history(symbol, days=30)
+                        if point.close is not None
+                    ]
+                except Exception:
+                    provider_points = []
+            points = _merge_history_points(cached_points, provider_points)[-30:]
+            results.append(
+                {
+                    "symbol": symbol,
+                    "status": "ready" if points else "missing_data",
+                    "source": _history_source_label(cached_points=cached_points, provider_points=provider_points),
+                    "points": points[-10:],
+                    "summary": _price_history_summary(points),
+                }
+            )
+        return results
+
+
+class TelegramUpdatePollingService:
+    def __init__(
+        self,
+        *,
+        settings_service: SettingsService,
+        command_service_factory: Callable[[], TelegramCommandService],
+        delivery_service_factory: Callable[[str], TelegramDeliveryService],
+        client: TelegramHttpClient | None = None,
+        poll_interval_seconds: float = 3.0,
+    ) -> None:
+        self._settings_service = settings_service
+        self._command_service_factory = command_service_factory
+        self._delivery_service_factory = delivery_service_factory
+        self._client = client or httpx.Client()
+        self._poll_interval_seconds = poll_interval_seconds
+        self._offset: int | None = None
+        self._stop_event = Event()
+        self._lock = Lock()
+        self._thread: Thread | None = None
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._stop_event.clear()
+            self._thread = Thread(target=self._run, name="telegram-update-poller", daemon=True)
+            self._thread.start()
+
+    def stop(self) -> None:
+        with self._lock:
+            thread = self._thread
+            self._thread = None
+            self._stop_event.set()
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=5.0)
+
+    def is_enabled(self) -> bool:
+        settings = self._settings_service.get()
+        return bool(settings.telegram_bot_token and settings.telegram_allowlisted_chat_ids)
+
+    def poll_once(self) -> dict[str, object]:
+        settings = self._settings_service.get()
+        bot_token = settings.telegram_bot_token.strip()
+        if not bot_token:
+            return {"ok": False, "status": "missing_bot_token", "processed": 0, "sent": 0}
+        if not settings.telegram_allowlisted_chat_ids:
+            return {"ok": False, "status": "missing_chat_ids", "processed": 0, "sent": 0}
+        params: dict[str, object] = {
+            "limit": 20,
+            "timeout": 0,
+            "allowed_updates": ["message", "edited_message"],
+        }
+        if self._offset is not None:
+            params["offset"] = self._offset
+        try:
+            response = self._client.get(
+                f"https://api.telegram.org/bot{bot_token}/getUpdates",
+                params=params,
+                timeout=15.0,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except Exception:
+            return {"ok": False, "status": "poll_failed", "processed": 0, "sent": 0}
+        if payload.get("ok") is not True:
+            return {"ok": False, "status": "telegram_api_error", "processed": 0, "sent": 0}
+        updates = payload.get("result") or []
+        if not isinstance(updates, list):
+            return {"ok": False, "status": "invalid_updates_payload", "processed": 0, "sent": 0}
+        processed = 0
+        sent = 0
+        for update in updates:
+            if not isinstance(update, dict):
+                continue
+            update_id = _to_int(update.get("update_id"))
+            if update_id is not None:
+                self._offset = max(self._offset or 0, update_id + 1)
+            result = self._process_update(update=update)
+            if result.get("processed") is True:
+                processed += 1
+            if result.get("sent") is True:
+                sent += 1
+        return {"ok": True, "status": "polled", "processed": processed, "sent": sent}
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set():
+            if self.is_enabled():
+                self.poll_once()
+            self._stop_event.wait(self._poll_interval_seconds)
+
+    def _process_update(self, *, update: dict[str, Any]) -> dict[str, bool]:
+        message = update.get("message") or update.get("edited_message")
+        if not isinstance(message, dict):
+            return {"processed": False, "sent": False}
+        chat = message.get("chat")
+        if not isinstance(chat, dict) or chat.get("id") is None:
+            return {"processed": False, "sent": False}
+        text = str(message.get("text") or "").strip()
+        if not text:
+            return {"processed": False, "sent": False}
+        chat_id = str(chat.get("id"))
+        service = self._command_service_factory()
+        command_result = service.handle_command(chat_id=chat_id, text=text)
+        if command_result.get("ok") is not True:
+            if command_result.get("status") == "forbidden":
+                return {"processed": True, "sent": False}
+        message_text = str(command_result.get("message") or "").strip()
+        if not message_text:
+            return {"processed": True, "sent": False}
+        delivery = self._delivery_service_factory(self._settings_service.get().telegram_bot_token)
+        sent = delivery.send_message(chat_id=chat_id, text=message_text).get("ok") is True
+        return {"processed": True, "sent": sent}
+
 
 def _to_float(value: object) -> float:
     try:
         return float(value or 0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _to_int(value: object) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _top_position_context(repository: object | None, *, limit: int) -> list[dict[str, Any]]:
+    if repository is None or not hasattr(repository, "es"):
+        return []
+    try:
+        rows = repository.es.search(
+            index="ibkr_position_snapshots_v1",
+            size=5000,
+            sort_field="report_date",
+            descending=True,
+        )
+    except Exception:
+        return []
+    position_rows = [row for row in rows if isinstance(row, dict)]
+    latest_report_date = _latest_report_date(position_rows)
+    if latest_report_date:
+        position_rows = [
+            row
+            for row in position_rows
+            if str(row.get("report_date") or row.get("report_date_iso") or "") == latest_report_date
+        ]
+    realized_by_symbol = _realized_pnl_by_symbol(repository)
+    normalized = [
+        _position_context_row(row, realized_pnl=realized_by_symbol.get(str(row.get("symbol") or "").upper()))
+        for row in position_rows
+    ]
+    normalized = [row for row in normalized if row.get("symbol")]
+    normalized.sort(key=lambda row: abs(_to_float(row.get("market_value"))), reverse=True)
+    return normalized[:limit]
+
+
+def _latest_report_date(rows: list[dict[str, Any]]) -> str:
+    dates = [
+        str(row.get("report_date") or row.get("report_date_iso") or "")
+        for row in rows
+        if row.get("report_date") or row.get("report_date_iso")
+    ]
+    return max(dates) if dates else ""
+
+
+def _position_context_row(row: dict[str, Any], *, realized_pnl: float | None) -> dict[str, Any]:
+    market_value = _first_float(
+        row,
+        ("market_value", "market_value_snapshot", "position_value", "value"),
+    )
+    quantity = _first_float(row, ("quantity", "position", "shares"))
+    mark_price = _first_float(row, ("mark_price_snapshot", "mark_price", "current_price", "price"))
+    average_cost = _first_float(row, ("average_cost_price", "cost_basis_price", "avg_cost"))
+    cost_basis = _first_float(row, ("cost_basis_money", "cost_basis", "cost"))
+    unrealized_pnl = _first_number(
+        row,
+        (
+            "unrealized_pnl",
+            "unrealized_pnl_snapshot",
+            "fifo_pnl_unrealized",
+            "unrealized_profit_loss",
+        ),
+    )
+    return {
+        "symbol": str(row.get("symbol") or "").upper(),
+        "report_date": row.get("report_date") or row.get("report_date_iso"),
+        "currency": row.get("currency"),
+        "quantity": quantity,
+        "mark_price": mark_price,
+        "average_cost": average_cost,
+        "cost_basis": cost_basis,
+        "market_value": market_value,
+        "unrealized_pnl": unrealized_pnl,
+        "unrealized_pnl_source_field": _first_present_key(
+            row,
+            (
+                "unrealized_pnl",
+                "unrealized_pnl_snapshot",
+                "fifo_pnl_unrealized",
+                "unrealized_profit_loss",
+            ),
+        ),
+        "realized_pnl": realized_pnl,
+    }
+
+
+def _realized_pnl_by_symbol(repository: object | None) -> dict[str, float]:
+    if repository is None or not hasattr(repository, "es"):
+        return {}
+    try:
+        trades = repository.es.search(index="ibkr_trade_records_v1", size=5000)
+    except Exception:
+        return {}
+    totals: dict[str, float] = {}
+    for trade in trades:
+        if not isinstance(trade, dict):
+            continue
+        symbol = str(trade.get("symbol") or "").upper()
+        if not symbol:
+            continue
+        totals[symbol] = totals.get(symbol, 0.0) + _to_float(trade.get("fifo_pnl_realized"))
+    return {symbol: round(value, 6) for symbol, value in totals.items()}
+
+
+def _cached_price_history(repository: object | None, *, symbol: str, limit: int) -> list[dict[str, Any]]:
+    if repository is None or not hasattr(repository, "es"):
+        return []
+    rows: list[dict[str, Any]] = []
+    for index in ("ibkr_symbol_price_history_v1", "market_symbol_price_history_v1"):
+        try:
+            found = repository.es.search(
+                index=index,
+                size=max(limit * 2, limit),
+                term_filters={"symbol": symbol.upper()},
+            )
+        except Exception:
+            found = []
+        for row in found:
+            if not isinstance(row, dict):
+                continue
+            close = _first_float(row, ("close", "close_price", "value", "last", "last_price"))
+            date_value = row.get("date_iso") or row.get("date") or row.get("price_date") or row.get("report_date")
+            if close is None or not date_value:
+                continue
+            rows.append(
+                {
+                    "date": str(date_value)[:10],
+                    "close": close,
+                    "source": str(row.get("source") or index),
+                }
+            )
+    return _dedupe_history_points(rows)[-limit:]
+
+
+def _first_float(row: dict[str, Any], keys: tuple[str, ...]) -> float | None:
+    for key in keys:
+        if key not in row:
+            continue
+        value = _to_float_or_none(row.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _first_number(row: dict[str, Any], keys: tuple[str, ...]) -> float | None:
+    for key in keys:
+        if key not in row:
+            continue
+        try:
+            return round(float(row.get(key) or 0), 6)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _first_present_key(row: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        if row.get(key) is not None:
+            return key
+    return None
+
+
+def _to_float_or_none(value: object) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return round(parsed, 6)
+
+
+def _merge_history_points(*point_lists: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows = []
+    for points in point_lists:
+        rows.extend(points)
+    return _dedupe_history_points(rows)
+
+
+def _dedupe_history_points(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_date: dict[str, dict[str, Any]] = {}
+    for point in points:
+        date_key = str(point.get("date") or "")[:10]
+        close = _to_float_or_none(point.get("close"))
+        if not date_key or close is None:
+            continue
+        by_date[date_key] = {
+            "date": date_key,
+            "close": close,
+            "source": str(point.get("source") or "unknown"),
+        }
+    return [by_date[key] for key in sorted(by_date)]
+
+
+def _history_source_label(*, cached_points: list[dict[str, Any]], provider_points: list[dict[str, Any]]) -> str:
+    sources = []
+    if cached_points:
+        sources.append("local_cache")
+    if provider_points:
+        provider_sources = sorted({str(point.get("source") or "provider") for point in provider_points})
+        sources.extend(provider_sources)
+    return "+".join(dict.fromkeys(sources)) if sources else "missing"
+
+
+def _price_history_summary(points: list[dict[str, Any]]) -> dict[str, Any]:
+    if not points:
+        return {"points": 0}
+    first = points[0]
+    last = points[-1]
+    first_close = _to_float_or_none(first.get("close"))
+    last_close = _to_float_or_none(last.get("close"))
+    change_pct = None
+    if first_close is not None and last_close is not None and first_close:
+        change_pct = round((last_close - first_close) / first_close * 100, 4)
+    closes = [_to_float_or_none(point.get("close")) for point in points]
+    valid_closes = [value for value in closes if value is not None]
+    return {
+        "points": len(points),
+        "start_date": first.get("date"),
+        "end_date": last.get("date"),
+        "start_close": first_close,
+        "end_close": last_close,
+        "change_pct": change_pct,
+        "min_close": min(valid_closes) if valid_closes else None,
+        "max_close": max(valid_closes) if valid_closes else None,
+    }
+
+
+def _status_value(status: object) -> str:
+    value = getattr(status, "value", status)
+    return str(value or "error")
+
+
+def _normalize_command(text: str) -> str:
+    if not text.strip().startswith("/"):
+        return ""
+    command = text.strip().split()[0].lower()
+    if "@" in command:
+        command = command.split("@", 1)[0]
+    return command
+
+
+def _ai_is_configured(settings: object) -> bool:
+    provider = str(getattr(settings, "ai_provider", "") or "").lower()
+    if provider == "mock":
+        return True
+    if provider == "minimax":
+        return bool(
+            str(
+                getattr(settings, "minimax_api_key", "")
+                or getattr(settings, "openai_api_key", "")
+                or ""
+            ).strip()
+        )
+    if provider == "deepseek":
+        return bool(str(getattr(settings, "deepseek_api_key", "") or "").strip())
+    if provider == "openai":
+        return bool(str(getattr(settings, "openai_api_key", "") or "").strip())
+    return False
 
 
 def _status_label(status: str) -> str:

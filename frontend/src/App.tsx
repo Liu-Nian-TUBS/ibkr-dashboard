@@ -14,12 +14,12 @@ const PortfolioAnalysisPage = lazy(() =>
 );
 
 const NAV_ITEMS: NavItem[] = [
-  { key: "overview", label: "资产总览", detail: "净值 / 曲线 / 状态", icon: "▦" },
-  { key: "positions", label: "持仓明细", detail: "仓位 / 行业 / 成本", icon: "▤" },
-  { key: "performance", label: "业绩分析", detail: "收益 / 日历 / 归因", icon: "⌁" },
-  { key: "trades", label: "交易明细", detail: "交易 / 现金 / 审计", icon: "☷" },
-  { key: "portfolioAnalysis", label: "持仓分析", detail: "市场 / 风险 / 个股", icon: "◔" },
-  { key: "settings", label: "设置与导入", detail: "凭据 / XML / 集成", icon: "⇧" },
+  { key: "overview", label: "资产总览", detail: "净值 / 曲线 / 状态", icon: "overview" },
+  { key: "positions", label: "持仓明细", detail: "仓位 / 行业 / 成本", icon: "positions" },
+  { key: "performance", label: "业绩分析", detail: "收益 / 日历 / 归因", icon: "performance" },
+  { key: "trades", label: "交易明细", detail: "交易 / 现金 / 审计", icon: "trades" },
+  { key: "portfolioAnalysis", label: "持仓分析", detail: "市场 / 风险 / 个股", icon: "analysis" },
+  { key: "settings", label: "设置与导入", detail: "凭据 / XML / 集成", icon: "settings" },
 ];
 
 const PAGE_RENDERERS: Record<PageKey, (navigate: (page: PageKey) => void) => JSX.Element> = {
@@ -56,12 +56,11 @@ function App() {
             <button
               key={item.key}
               type="button"
-            className={item.key === activePage ? "active" : ""}
-            onClick={() => setActivePage(item.key)}
-          >
-              <span className="nav-icon" aria-hidden="true">{item.icon}</span>
+              className={item.key === activePage ? "active" : ""}
+              onClick={() => setActivePage(item.key)}
+            >
+              <NavIcon name={item.icon ?? "overview"} />
               <strong>{item.label}</strong>
-              <span>{item.detail}</span>
             </button>
           ))}
         </nav>
@@ -82,7 +81,6 @@ function App() {
             </button>
             <div>
               <strong>{activePage === "overview" ? "本地投资控制台" : activeItem.label}</strong>
-              <span>{activePage === "overview" ? "基于 IBKR Flex 与本地数据源的投资组合分析与风险监控" : activeItem.detail}</span>
             </div>
           </div>
           <div className="top-strip__meta">
@@ -96,6 +94,70 @@ function App() {
         </AppErrorBoundary>
       </main>
     </div>
+  );
+}
+
+function NavIcon({ name }: { name: string }) {
+  const common = {
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.8,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+  };
+  return (
+    <span className="nav-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" focusable="false">
+        {name === "overview" ? (
+          <>
+            <path {...common} d="M4 13.5 9.2 8l4.4 4 6.4-7" />
+            <path {...common} d="M4 19h16" />
+            <path {...common} d="M5 16v3" />
+            <path {...common} d="M11 13v6" />
+            <path {...common} d="M17 10v9" />
+          </>
+        ) : null}
+        {name === "positions" ? (
+          <>
+            <rect {...common} x="4" y="5" width="16" height="14" rx="2" />
+            <path {...common} d="M8 9h8" />
+            <path {...common} d="M8 13h5" />
+            <path {...common} d="M16 13h.01" />
+          </>
+        ) : null}
+        {name === "performance" ? (
+          <>
+            <path {...common} d="M5 19V5" />
+            <path {...common} d="M5 19h14" />
+            <path {...common} d="M8 15l3-4 3 2 4-6" />
+            <circle {...common} cx="11" cy="11" r="1" />
+            <circle {...common} cx="18" cy="7" r="1" />
+          </>
+        ) : null}
+        {name === "trades" ? (
+          <>
+            <path {...common} d="M7 7h11" />
+            <path {...common} d="m15 4 3 3-3 3" />
+            <path {...common} d="M17 17H6" />
+            <path {...common} d="m9 14-3 3 3 3" />
+          </>
+        ) : null}
+        {name === "analysis" ? (
+          <>
+            <circle {...common} cx="12" cy="12" r="7" />
+            <path {...common} d="M12 5v7l5 3" />
+            <path {...common} d="M8 18.2 6.5 21" />
+            <path {...common} d="M16 18.2l1.5 2.8" />
+          </>
+        ) : null}
+        {name === "settings" ? (
+          <>
+            <circle {...common} cx="12" cy="12" r="3" />
+            <path {...common} d="M19 12a7.6 7.6 0 0 0-.1-1.2l2-1.5-2-3.5-2.4 1a7 7 0 0 0-2-1.1L14 3h-4l-.5 2.7a7 7 0 0 0-2 1.1l-2.4-1-2 3.5 2 1.5A7.6 7.6 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 2 1.1L10 21h4l.5-2.7a7 7 0 0 0 2-1.1l2.4 1 2-3.5-2-1.5c.1-.4.1-.8.1-1.2Z" />
+          </>
+        ) : null}
+      </svg>
+    </span>
   );
 }
 

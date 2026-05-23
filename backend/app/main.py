@@ -85,11 +85,17 @@ from app.services.daily_performance_service import DailyPerformanceService
 from app.services.flex_client import FlexStatementClient
 from app.services.quote_service import QuoteService, fetch_benchmark_history, fetch_finnhub_quote, fetch_longbridge_quote, fetch_yahoo_quote
 from app.services.ingestion_service import IngestionService
+from app.services.market_data_provider import FutuOpenDReadOnlyProvider
+from app.services.market_data_provider import LongbridgeReadOnlyProvider
 from app.services.market_data_provider import QuoteFallbackMarketDataProvider
 from app.services.manual_backfill_service import ManualBackfillService
 from app.services.portfolio_analysis_service import PortfolioAnalysisService
 from app.services.settings_service import SettingsService
-from app.services.telegram_service import TelegramCommandService, TelegramDeliveryService
+from app.services.telegram_service import (
+    TelegramCommandService,
+    TelegramDeliveryService,
+    TelegramUpdatePollingService,
+)
 from app.services.xml_parser import parse_xml_string
 
 
@@ -291,16 +297,27 @@ def execute_scheduled_daily_sync() -> None:
 
 
 def _build_telegram_command_service() -> TelegramCommandService:
+    settings = settings_service.get()
+    if settings.futu_connection_mode == "local_opend":
+        market_data_provider = FutuOpenDReadOnlyProvider(
+            host=settings.futu_opend_host,
+            port=settings.futu_opend_port,
+        )
+    elif settings.futu_connection_mode == "longbridge":
+        market_data_provider = LongbridgeReadOnlyProvider()
+    else:
+        market_data_provider = QuoteFallbackMarketDataProvider(_quote_service_instance)
     analysis_service = PortfolioAnalysisService(
         raw_repository=raw_repository,
         settings_service=settings_service,
-        market_data_provider=QuoteFallbackMarketDataProvider(_quote_service_instance),
+        market_data_provider=market_data_provider,
         industry_mapping_service=_industry_mapping_service_instance,
     )
     return TelegramCommandService(
         settings_service=settings_service,
         analysis_service=analysis_service,
         raw_repository=raw_repository,
+        market_data_provider=market_data_provider,
     )
 
 
@@ -309,6 +326,10 @@ def run_configured_telegram_report() -> dict[str, object]:
     service = _build_telegram_command_service()
     delivery = TelegramDeliveryService(bot_token=settings.telegram_bot_token)
     return service.deliver_daily_report(delivery)
+
+
+def _build_telegram_delivery_service(bot_token: str) -> TelegramDeliveryService:
+    return TelegramDeliveryService(bot_token=bot_token)
 
 
 def execute_scheduled_telegram_report() -> None:
@@ -367,6 +388,11 @@ daily_sync_scheduler = DailySyncScheduler(run_job=execute_scheduled_daily_sync)
 telegram_report_scheduler = DailyTimeScheduler(
     run_job=execute_scheduled_telegram_report,
     job_id="telegram_daily_report",
+)
+telegram_update_poller = TelegramUpdatePollingService(
+    settings_service=settings_service,
+    command_service_factory=_build_telegram_command_service,
+    delivery_service_factory=_build_telegram_delivery_service,
 )
 manual_backfill_service = ManualBackfillService()
 set_daily_sync_runner(run_daily_sync_with_credentials)
@@ -446,6 +472,17 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
             extra={"trace_id": "startup"},
         )
     try:
+        telegram_update_poller.start()
+        logger.info(
+            json.dumps({"event": "telegram_update_poller_started"}),
+            extra={"trace_id": "startup"},
+        )
+    except Exception as exc:  # pragma: no cover - defensive runtime logging
+        logger.error(
+            json.dumps({"event": "telegram_update_poller_failed", "error": str(exc)}),
+            extra={"trace_id": "startup"},
+        )
+    try:
         backfilled_days = run_startup_auto_backfill()
         if backfilled_days:
             logger.info(
@@ -460,6 +497,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
             extra={"trace_id": "startup"},
         )
     yield
+    telegram_update_poller.stop()
     telegram_report_scheduler.shutdown()
     daily_sync_scheduler.shutdown()
 

@@ -12,7 +12,7 @@ import {
   formatDateTimeMinute,
   formatInteger,
 } from "../../lib/format";
-import { DataState, DataTable, DeltaText, Field, MetricCard, PageHeader, Pager, Surface } from "../../components/Primitives";
+import { DataState, DataTable, DeltaText, Field, MetricCard, PageHeader, Pager, StatusPill, Surface } from "../../components/Primitives";
 
 type TradeQuery = {
   symbol: string;
@@ -33,19 +33,26 @@ type CashFlowQuery = {
 };
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100];
+type TradesTab = "trades" | "cash";
 
 export function TradesPage() {
+  const [activeTab, setActiveTab] = useState<TradesTab>("trades");
+
   return (
-    <>
+    <div className="trades-page">
       <PageHeader
         eyebrow="交易明细"
-        title="交易记录与出入金查询"
-        description="这里保留两个独立查询：交易成交流水，以及账户出入金流水。所有金额保持原始币种展示。"
+        title="交易记录与资金流水"
+        meta={<StatusPill tone="accent">只读分析</StatusPill>}
       />
 
-      <TradeRecordsPanel />
-      <CashFlowsPanel />
-    </>
+      <div className="trades-tabs segmented-control segmented-control--compact" role="tablist" aria-label="交易明细分类">
+        <button type="button" className={activeTab === "trades" ? "active" : ""} onClick={() => setActiveTab("trades")}>交易记录</button>
+        <button type="button" className={activeTab === "cash" ? "active" : ""} onClick={() => setActiveTab("cash")}>出入金流水</button>
+      </div>
+
+      {activeTab === "trades" ? <TradeRecordsPanel /> : <CashFlowsPanel />}
+    </div>
   );
 }
 
@@ -68,7 +75,7 @@ function TradeRecordsPanel() {
   }, [load]);
 
   return (
-    <Surface title="交易记录查询" subtitle="按成交时间、股票代码和买卖方向筛选。">
+    <Surface title="交易流水" className="trades-surface">
       <div className="module-filter-bar module-filter-bar--trade">
         <Field label="开始时间">
           <input type="date" value={query.start_date} onChange={(event) => setQuery({ ...query, start_date: event.target.value, page: 1 })} />
@@ -110,7 +117,7 @@ function TradeRecordsContent({
 
   return (
     <>
-      <div className="metric-grid metric-grid--compact">
+      <div className="metric-grid metric-grid--compact trades-kpi-grid trades-kpi-grid--trade">
         <MetricCard label="成交笔数" value={formatInteger(summary.trade_count)} />
         <MetricCard label="买入笔数" value={formatInteger(summary.buy_count)} tone="positive" />
         <MetricCard label="卖出笔数" value={formatInteger(summary.sell_count)} tone="negative" />
@@ -163,7 +170,7 @@ function CashFlowsPanel() {
   }, [load]);
 
   return (
-    <Surface title="出入金记录查询" subtitle="按发生时间、币种和入金/出金方向筛选。">
+    <Surface title="出入金流水" className="trades-surface">
       <div className="module-filter-bar module-filter-bar--cash">
         <Field label="开始时间">
           <input type="date" value={query.start_date} onChange={(event) => setQuery({ ...query, start_date: event.target.value, page: 1 })} />
@@ -207,7 +214,7 @@ function CashFlowsContent({
 
   return (
     <>
-      <div className="metric-grid metric-grid--compact">
+      <div className="metric-grid metric-grid--compact trades-kpi-grid trades-kpi-grid--cash">
         <MetricCard label="流水总笔数" value={formatInteger(summary.flow_count ?? total)} />
         <MetricCard label="入金笔数" value={formatInteger(summary.inflow_count)} tone="positive" />
         <MetricCard label="出金笔数" value={formatInteger(summary.outflow_count)} tone="negative" />

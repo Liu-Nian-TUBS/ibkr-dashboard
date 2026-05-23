@@ -15,8 +15,8 @@ from app.api.portfolio_analysis_contracts import AINarrativePayload
 from app.api.portfolio_analysis_contracts import AnalysisStatus
 
 
-STRUCTURED_OVERLAY_PENDING_TTL_SECONDS = 25.0
-STRUCTURED_OVERLAY_TIMEOUT_SECONDS = 15.0
+STRUCTURED_OVERLAY_PENDING_TTL_SECONDS = 100.0
+STRUCTURED_OVERLAY_TIMEOUT_SECONDS = 90.0
 
 
 class AIProvider(Protocol):
@@ -163,7 +163,7 @@ class MockAIProvider:
 class OpenAIResponsesProvider:
     name = "openai"
 
-    def __init__(self, *, api_key: str, model: str = "gpt-5", timeout_seconds: float = 30.0) -> None:
+    def __init__(self, *, api_key: str, model: str = "gpt-5-mini", timeout_seconds: float = 30.0) -> None:
         self.api_key = api_key
         self.model = model
         self.timeout_seconds = timeout_seconds
@@ -360,7 +360,7 @@ class MiniMaxChatCompletionsProvider:
         self,
         *,
         api_key: str,
-        model: str = "MiniMax-M2.7-highspeed",
+        model: str = "MiniMax-M2.5-highspeed",
         base_url: str = "https://api.minimaxi.com/v1",
         timeout_seconds: float = 90.0,
     ) -> None:
@@ -377,7 +377,7 @@ class MiniMaxChatCompletionsProvider:
                 model=self.model,
                 status=AnalysisStatus.UNAVAILABLE,
                 confidence=0.0,
-                reason="minimax_api_key_not_configured",
+                reason=f"{self.name}_api_key_not_configured",
             )
         system_prompt = (
             "你是一个本地只读的持仓分析助手。只允许使用用户提供的结构化 JSON 指标。"
@@ -410,7 +410,7 @@ class MiniMaxChatCompletionsProvider:
                     model=self.model,
                     status=AnalysisStatus.ERROR,
                     confidence=0.0,
-                    reason=f"minimax_generation_empty_or_invalid_json: {exc}",
+                    reason=f"{self.name}_generation_empty_or_invalid_json: {exc}",
                 )
             except httpx.TimeoutException:
                 return AINarrativePayload(
@@ -418,7 +418,7 @@ class MiniMaxChatCompletionsProvider:
                     model=self.model,
                     status=AnalysisStatus.ERROR,
                     confidence=0.0,
-                    reason="minimax_generation_timed_out",
+                    reason=f"{self.name}_generation_timed_out",
                 )
             except Exception as exc:
                 return AINarrativePayload(
@@ -426,7 +426,7 @@ class MiniMaxChatCompletionsProvider:
                     model=self.model,
                     status=AnalysisStatus.ERROR,
                     confidence=0.0,
-                    reason=f"minimax_generation_failed: {exc}",
+                    reason=f"{self.name}_generation_failed: {exc}",
                 )
         except httpx.TimeoutException:
             return AINarrativePayload(
@@ -434,7 +434,7 @@ class MiniMaxChatCompletionsProvider:
                 model=self.model,
                 status=AnalysisStatus.ERROR,
                 confidence=0.0,
-                reason="minimax_generation_timed_out",
+                reason=f"{self.name}_generation_timed_out",
             )
         except Exception as exc:
             return AINarrativePayload(
@@ -442,7 +442,7 @@ class MiniMaxChatCompletionsProvider:
                 model=self.model,
                 status=AnalysisStatus.ERROR,
                 confidence=0.0,
-                reason=f"minimax_generation_failed: {exc}",
+                reason=f"{self.name}_generation_failed: {exc}",
             )
         try:
             return AINarrativePayload(
@@ -461,7 +461,7 @@ class MiniMaxChatCompletionsProvider:
                 model=self.model,
                 status=AnalysisStatus.ERROR,
                 confidence=0.0,
-                reason="minimax_generation_timed_out",
+                reason=f"{self.name}_generation_timed_out",
             )
         except Exception as exc:
             return AINarrativePayload(
@@ -469,7 +469,7 @@ class MiniMaxChatCompletionsProvider:
                 model=self.model,
                 status=AnalysisStatus.ERROR,
                 confidence=0.0,
-                reason=f"minimax_generation_failed: {exc}",
+                reason=f"{self.name}_generation_failed: {exc}",
             )
 
     def _post_chat_completion(self, endpoint_url: str, payload: dict[str, Any]) -> httpx.Response:
@@ -495,8 +495,8 @@ class MiniMaxChatCompletionsProvider:
     ) -> dict[str, Any]:
         endpoint_url = _chat_completions_url(self.base_url)
         last_exc: Exception | None = None
-        for model in _minimax_model_candidates(self.model):
-            payload = _minimax_request_payload(
+        for model in self._model_candidates():
+            payload = self._request_payload(
                 model=model,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
@@ -506,7 +506,7 @@ class MiniMaxChatCompletionsProvider:
             try:
                 response = self._post_chat_completion(endpoint_url, payload)
                 response_payload = _response_json(response)
-                _raise_for_minimax_base_resp(response_payload)
+                self._raise_response_error(response_payload)
                 self.last_model_used = model
                 return _parse_json_object(_extract_chat_completion_text(response_payload))
             except httpx.HTTPStatusError as exc:
@@ -518,13 +518,36 @@ class MiniMaxChatCompletionsProvider:
             raise last_exc
         raise ValueError("minimax_model_candidates_empty")
 
+    def _model_candidates(self) -> list[str]:
+        return _minimax_model_candidates(self.model)
+
+    def _request_payload(
+        self,
+        *,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        response_format: bool,
+        max_tokens: int,
+    ) -> dict[str, Any]:
+        return _minimax_request_payload(
+            model=model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_format=response_format,
+            max_tokens=max_tokens,
+        )
+
+    def _raise_response_error(self, payload: dict[str, Any]) -> None:
+        _raise_for_minimax_base_resp(payload)
+
     def generate_portfolio_overlay(self, *, metrics: dict[str, Any]) -> dict[str, Any]:
         if not self.api_key:
             return {
                 "status": AnalysisStatus.UNAVAILABLE.value,
                 "provider": self.name,
                 "model": self.model,
-                "reason": "minimax_api_key_not_configured",
+                "reason": f"{self.name}_api_key_not_configured",
             }
         system_prompt = (
             "你是本地只读投资看板中的结构化持仓风险校验器。只允许使用用户输入 JSON。"
@@ -546,14 +569,14 @@ class MiniMaxChatCompletionsProvider:
                 "status": AnalysisStatus.ERROR.value,
                 "provider": self.name,
                 "model": self.model,
-                "reason": "minimax_portfolio_overlay_timed_out",
+                "reason": f"{self.name}_portfolio_overlay_timed_out",
             }
         except Exception as exc:
             return {
                 "status": AnalysisStatus.ERROR.value,
                 "provider": self.name,
                 "model": self.model,
-                "reason": f"minimax_portfolio_overlay_failed: {exc}",
+                "reason": f"{self.name}_portfolio_overlay_failed: {exc}",
             }
         finally:
             self.timeout_seconds = original_timeout
@@ -564,7 +587,7 @@ class MiniMaxChatCompletionsProvider:
                 provider=self.name,
                 model=self.model,
                 symbol=str(metrics.get("selected_symbol") or "").upper() or None,
-                reason="minimax_api_key_not_configured",
+                reason=f"{self.name}_api_key_not_configured",
             )
         system_prompt = (
             "你是本地只读 IBKR 投资看板中的个股持仓分析助手。"
@@ -585,7 +608,7 @@ class MiniMaxChatCompletionsProvider:
                 provider=self.name,
                 model=self.model,
                 symbol=str(metrics.get("selected_symbol") or "").upper() or None,
-                reason="minimax_stock_memo_timed_out",
+                reason=f"{self.name}_stock_memo_timed_out",
                 status=AnalysisStatus.ERROR,
             )
         except Exception as exc:
@@ -593,11 +616,54 @@ class MiniMaxChatCompletionsProvider:
                 provider=self.name,
                 model=self.model,
                 symbol=str(metrics.get("selected_symbol") or "").upper() or None,
-                reason=f"minimax_stock_memo_failed: {exc}",
+                reason=f"{self.name}_stock_memo_failed: {exc}",
                 status=AnalysisStatus.ERROR,
             )
         finally:
             self.timeout_seconds = original_timeout
+
+
+class DeepSeekChatCompletionsProvider(MiniMaxChatCompletionsProvider):
+    name = "deepseek"
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str = "deepseek-v4-flash",
+        base_url: str = "https://api.deepseek.com",
+        timeout_seconds: float = 90.0,
+    ) -> None:
+        super().__init__(
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def _model_candidates(self) -> list[str]:
+        normalized = str(self.model or "").strip() or "deepseek-v4-flash"
+        return [normalized]
+
+    def _request_payload(
+        self,
+        *,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        response_format: bool,
+        max_tokens: int,
+    ) -> dict[str, Any]:
+        return _openai_compatible_chat_request_payload(
+            model=model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_format=response_format,
+            max_tokens=max_tokens,
+        )
+
+    def _raise_response_error(self, payload: dict[str, Any]) -> None:
+        return None
 
 
 class AINarrativeService:
@@ -752,6 +818,34 @@ class AINarrativeService:
                 return expired
             return dict(state)
         return _portfolio_overlay_pending(provider=provider, reason="structured_ai_overlay_waiting_for_background_refresh")
+
+    def cached_portfolio_overlay_or_unavailable(
+        self,
+        *,
+        provider: AIProvider,
+        cache_key: str = "default",
+    ) -> dict[str, Any]:
+        key = self._key(provider=provider, section="portfolio_overlay", cache_key=cache_key)
+        with self._lock:
+            cached = self._structured_cache.get(key)
+            state = self._structured_state.get(key)
+        if cached is not None:
+            return dict(cached)
+        if state is not None:
+            if state.get("status") == AnalysisStatus.PENDING.value and _portfolio_overlay_pending_expired(state):
+                expired = {
+                    "status": AnalysisStatus.ERROR.value,
+                    "provider": provider.name,
+                    "model": _provider_model(provider),
+                    "as_of": _now_iso(),
+                    "confidence": 0.0,
+                    "reason": "structured_ai_overlay_timed_out",
+                }
+                with self._lock:
+                    self._structured_state[key] = expired
+                return expired
+            return dict(state)
+        return _portfolio_overlay_unavailable(provider=provider, reason="structured_ai_overlay_waiting_for_manual_refresh")
 
     def mark_portfolio_overlay_started(
         self,
@@ -1105,6 +1199,7 @@ def _portfolio_overlay_schema() -> dict[str, Any]:
         "additionalProperties": False,
         "properties": {
             "rank": {"type": "string"},
+            "icon": {"type": "string"},
             "title": {"type": "string"},
             "body": {"type": "string"},
         },
@@ -1213,6 +1308,7 @@ def _portfolio_overlay_prompt(metrics: dict[str, Any]) -> str:
         "position_role 只能是 核心仓/卫星仓/观察仓/待清理仓。risk_points 和 tracking_points 各 2-3 条。"
         "rebalance_advice 字段：cards、action_today、thinking_prompt、market_note、research_direction、undervalued_symbols、"
         "crowded_symbols、catalysts_30d、data_90d、optimal_structure、invalidation、confidence。\n"
+        "cards 中每张卡可带 icon，允许值为 compass/search/alert/calendar/check。\n"
         f"输入 JSON：\n{json.dumps(metrics, ensure_ascii=False, sort_keys=True)}"
     )
 
@@ -1297,7 +1393,7 @@ def _provider_model(provider: Any) -> str | None:
 
 
 def _minimax_model_candidates(model: str) -> list[str]:
-    normalized = str(model or "").strip() or "MiniMax-M2.7-highspeed"
+    normalized = str(model or "").strip() or "MiniMax-M2.5-highspeed"
     candidates = [normalized]
     if normalized == "MiniMax-M2.7-highspeed":
         candidates.append("MiniMax-M2.5-highspeed")
@@ -1308,8 +1404,11 @@ def build_ai_provider(
     *,
     provider_name: str,
     openai_api_key: str,
+    ai_model: str = "",
     minimax_api_key: str = "",
     minimax_base_url: str = "https://api.minimaxi.com/v1",
+    deepseek_api_key: str = "",
+    deepseek_base_url: str = "https://api.deepseek.com",
 ) -> AIProvider:
     normalized = (provider_name or "openai").lower()
     if normalized == "mock":
@@ -1317,9 +1416,16 @@ def build_ai_provider(
     if normalized == "minimax":
         return MiniMaxChatCompletionsProvider(
             api_key=minimax_api_key or openai_api_key,
+            model=ai_model or "MiniMax-M2.5-highspeed",
             base_url=minimax_base_url or "https://api.minimaxi.com/v1",
         )
-    return OpenAIResponsesProvider(api_key=openai_api_key)
+    if normalized == "deepseek":
+        return DeepSeekChatCompletionsProvider(
+            api_key=deepseek_api_key,
+            model=ai_model or "deepseek-v4-flash",
+            base_url=deepseek_base_url or "https://api.deepseek.com",
+        )
+    return OpenAIResponsesProvider(api_key=openai_api_key, model=ai_model or "gpt-5-mini")
 
 
 def _extract_output_text(payload: dict[str, Any]) -> str:
@@ -1355,6 +1461,28 @@ def _minimax_request_payload(
         "temperature": 0.1,
         "max_tokens": max_tokens,
         "reasoning_split": True,
+    }
+    if response_format:
+        payload["response_format"] = {"type": "json_object"}
+    return payload
+
+
+def _openai_compatible_chat_request_payload(
+    *,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    response_format: bool,
+    max_tokens: int = 1600,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.1,
+        "max_tokens": max_tokens,
     }
     if response_format:
         payload["response_format"] = {"type": "json_object"}

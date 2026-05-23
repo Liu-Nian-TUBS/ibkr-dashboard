@@ -1,4 +1,5 @@
 import type {
+  AiModelCatalogResponse,
   ImportContentFile,
   ImportTaskResponse,
   OverviewResponse,
@@ -85,6 +86,7 @@ export const api = {
   trades: (query?: RequestQuery) => getJson<Record<string, unknown>>("/api/trades", query),
   cashFlows: (query?: RequestQuery) => getJson<Record<string, unknown>>("/api/cash-flows", query),
   settings: () => getJson<SettingsResponse>("/api/settings"),
+  aiModels: () => getJson<AiModelCatalogResponse>("/api/settings/ai-models"),
   saveSettings: (payload: SettingsUpdatePayload) => putJson<SettingsResponse>("/api/settings", payload),
   createImportTask: (files: ImportContentFile[]) =>
     postJson<ImportTaskResponse>("/api/import/tasks/content/create", { files }),

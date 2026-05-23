@@ -405,9 +405,24 @@ export interface OverviewResponse extends ApiRecord {
   risk_dashboard?: OverviewRiskDashboard;
 }
 
-export type AiProvider = "openai" | "minimax" | "mock";
+export type AiProvider = "openai" | "minimax" | "deepseek" | "mock";
 
 export type FutuConnectionMode = "disabled" | "local_opend" | "longbridge";
+
+export interface AiModelOption {
+  value: string;
+  label: string;
+}
+
+export interface AiModelProviderCatalog {
+  provider: AiProvider;
+  default_model: string;
+  models: AiModelOption[];
+}
+
+export interface AiModelCatalogResponse {
+  providers: AiModelProviderCatalog[];
+}
 
 export interface SettingsResponse {
   base_currency: string;
@@ -418,9 +433,12 @@ export interface SettingsResponse {
   pull_frequency_minutes: number;
   display_realtime_prices: boolean;
   ai_provider: AiProvider;
+  ai_model: string;
   openai_api_key: string;
   minimax_api_key: string;
   minimax_base_url: string;
+  deepseek_api_key: string;
+  deepseek_base_url: string;
   futu_connection_mode: FutuConnectionMode;
   futu_opend_host: string;
   futu_opend_port: number;

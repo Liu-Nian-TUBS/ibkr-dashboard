@@ -3,6 +3,7 @@
 .worktrees/
 .omx/
 .codex/
+.codegraph/
 
 # IDE/editor metadata
 .idea/
@@ -16,6 +17,16 @@
 # Local screenshots or temporary visual notes
 /img.png
 /screenshots/
+
+# Keep repository uploads focused on code and README only.
+*.md
+!README.md
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.svg
 
 # Python caches and local environments
 __pycache__/
