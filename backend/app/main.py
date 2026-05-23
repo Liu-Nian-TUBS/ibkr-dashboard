@@ -247,22 +247,34 @@ def run_daily_sync_with_credentials(token: str, query_id: str) -> dict[str, str]
         statement_xml = flex_client.fetch_statement_xml(token=token, query_id=query_id)
         parsed = parse_xml_string(statement_xml)
         raw_repository.upsert_parsed_data(parsed)
-        settings_service.mark_sync_success(datetime.now(timezone.utc).isoformat())
+        post_sync_errors: list[str] = []
         for snapshot in parsed.account_snapshots:
+            account_id = snapshot.account_id
+            report_date = snapshot.report_date
             try:
                 daily_performance_service.compute_for_date(
-                    account_id=snapshot.account_id,
-                    report_date=snapshot.report_date,
+                    account_id=account_id,
+                    report_date=report_date,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                post_sync_errors.append(
+                    f"performance:{account_id}:{report_date}:{exc}"
+                )
             try:
                 auto_reconciliation_service.reconcile_date(
-                    account_id=snapshot.account_id,
-                    report_date=snapshot.report_date,
+                    account_id=account_id,
+                    report_date=report_date,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                post_sync_errors.append(
+                    f"reconciliation:{account_id}:{report_date}:{exc}"
+                )
+        if post_sync_errors:
+            raise RuntimeError(
+                "daily sync post-processing failed: "
+                + "; ".join(post_sync_errors)
+            )
+        settings_service.mark_sync_success(datetime.now(timezone.utc).isoformat())
         return {
             "status": "synced",
             "statement_size": str(len(statement_xml)),

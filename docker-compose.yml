@@ -22,6 +22,8 @@ services:
     environment:
       - ES_HOST=http://elasticsearch:9200
       - ES_AUTH_MODE=none
+    volumes:
+      - api_config:/root/.config/ibkr-dashboard
     depends_on:
       elasticsearch:
         condition: service_healthy
@@ -41,3 +43,4 @@ services:
 
 volumes:
   es_data:
+  api_config:

@@ -1,7 +1,6 @@
 from collections.abc import Callable
 import time
 from ssl import SSLError
-import ssl
 from xml.etree import ElementTree as ET
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -29,23 +28,13 @@ class FlexStatementClient:
             http2=False,
             follow_redirects=True,
         )
-        self._external_client = client is not None
 
     def _request_get(self, *, path: str, params: dict[str, str]) -> httpx.Response:
         last_error: Exception | None = None
         url = f"{self._base_url}/{path}"
         for attempt in range(4):
             try:
-                if self._external_client:
-                    return self._client.get(url, params=params)
-                # Use a fresh client each attempt to avoid reusing broken TLS sessions.
-                with httpx.Client(
-                    timeout=httpx.Timeout(20.0, connect=8.0),
-                    limits=httpx.Limits(max_connections=10),
-                    http2=False,
-                    follow_redirects=True,
-                ) as client:
-                    return client.get(url, params=params)
+                return self._client.get(url, params=params)
             except (httpx.TransportError, SSLError, OSError) as exc:
                 last_error = exc
                 if attempt == 3:
@@ -59,21 +48,6 @@ class FlexStatementClient:
                 status = getattr(response, "status", 200)
             return httpx.Response(status_code=status, text=body)
         except Exception as exc:  # pragma: no cover - runtime network fallback
-            last_error = exc
-        # Last-resort TLS fallback for environments with broken SSL middleboxes.
-        try:  # pragma: no cover - runtime network fallback
-            query = urlencode(params)
-            insecure_ctx = ssl._create_unverified_context()
-            req = Request(
-                f"{url}?{query}",
-                method="GET",
-                headers={"User-Agent": "ibkr-dashboard-flex-client/1.0"},
-            )
-            with urlopen(req, timeout=15, context=insecure_ctx) as response:
-                body = response.read().decode("utf-8", errors="replace")
-                status = getattr(response, "status", 200)
-            return httpx.Response(status_code=status, text=body)
-        except Exception as exc:
             last_error = exc
         assert last_error is not None
         raise RuntimeError(

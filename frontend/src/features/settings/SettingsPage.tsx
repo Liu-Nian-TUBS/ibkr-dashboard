@@ -19,6 +19,7 @@ interface SettingsForm {
   flex_token: string;
   flex_query_id: string;
   pull_frequency_minutes: number;
+  display_realtime_prices: boolean;
   ai_provider: AiProvider;
   ai_model: string;
   openai_api_key: string;
@@ -34,6 +35,7 @@ interface SettingsForm {
   telegram_reports_enabled: boolean;
   telegram_daily_report_time: string;
   mcp_server_enabled: boolean;
+  report_cache_enabled: boolean;
   report_cache_ttl_minutes: number;
 }
 
@@ -44,6 +46,7 @@ const defaultForm: SettingsForm = {
   flex_token: "",
   flex_query_id: "",
   pull_frequency_minutes: 60,
+  display_realtime_prices: false,
   ai_provider: "openai",
   ai_model: "gpt-5-mini",
   openai_api_key: "",
@@ -59,6 +62,7 @@ const defaultForm: SettingsForm = {
   telegram_reports_enabled: false,
   telegram_daily_report_time: "08:30",
   mcp_server_enabled: false,
+  report_cache_enabled: true,
   report_cache_ttl_minutes: 60,
 };
 
@@ -150,6 +154,7 @@ export function SettingsPage() {
         flex_token: asText(data.flex_token, ""),
         flex_query_id: asText(data.flex_query_id, ""),
         pull_frequency_minutes: asNumber(data.pull_frequency_minutes, 60),
+        display_realtime_prices: Boolean(data.display_realtime_prices),
         ai_provider: data.ai_provider ?? "openai",
         ai_model: asText(data.ai_model, ""),
         openai_api_key: asText(data.openai_api_key, ""),
@@ -165,6 +170,7 @@ export function SettingsPage() {
         telegram_reports_enabled: Boolean(data.telegram_reports_enabled),
         telegram_daily_report_time: asText(data.telegram_daily_report_time, "08:30"),
         mcp_server_enabled: Boolean(data.mcp_server_enabled),
+        report_cache_enabled: Boolean(data.report_cache_enabled),
         report_cache_ttl_minutes: asNumber(data.report_cache_ttl_minutes, 60),
       });
     } catch (error) {
@@ -196,7 +202,7 @@ export function SettingsPage() {
         flex_token: form.flex_token,
         flex_query_id: form.flex_query_id,
         pull_frequency_minutes: form.pull_frequency_minutes,
-        display_realtime_prices: false,
+        display_realtime_prices: form.display_realtime_prices,
         ai_provider: form.ai_provider,
         ai_model: form.ai_model || defaultAiModel(form.ai_provider, aiModelCatalog),
         openai_api_key: form.openai_api_key,
@@ -212,7 +218,7 @@ export function SettingsPage() {
         telegram_reports_enabled: form.telegram_reports_enabled,
         telegram_daily_report_time: form.telegram_daily_report_time,
         mcp_server_enabled: form.mcp_server_enabled,
-        report_cache_enabled: true,
+        report_cache_enabled: form.report_cache_enabled,
         report_cache_ttl_minutes: form.report_cache_ttl_minutes,
       };
       if (hasMaskedValue(form.finnhub_api_key)) delete payload.finnhub_api_key;

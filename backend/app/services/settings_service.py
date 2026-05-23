@@ -1,6 +1,11 @@
-from datetime import datetime
-
+import base64
 from dataclasses import dataclass, field, fields
+from datetime import datetime
+import hashlib
+import hmac
+import os
+from pathlib import Path
+import secrets
 from typing import Protocol
 
 
@@ -37,6 +42,10 @@ class AppSettings:
 class SettingsRepositoryLike(Protocol):
     def get_settings(self) -> dict | None: ...
     def upsert_settings(self, doc: dict) -> None: ...
+
+
+class SettingsSecretError(RuntimeError):
+    """Raised when encrypted settings secrets cannot be loaded safely."""
 
 
 class SettingsService:
@@ -146,41 +155,41 @@ class SettingsService:
     def _persist(self) -> None:
         if self._repository is None:
             return
-        self._repository.upsert_settings(
-            {
-                "base_currency": self._settings.base_currency,
-                "timezone": self._settings.timezone,
-                "finnhub_api_key": self._settings.finnhub_api_key,
-                "flex_token": self._settings.flex_token,
-                "flex_query_id": self._settings.flex_query_id,
-                "pull_frequency_minutes": self._settings.pull_frequency_minutes,
-                "display_realtime_prices": self._settings.display_realtime_prices,
-                "ai_provider": self._settings.ai_provider,
-                "ai_model": self._settings.ai_model,
-                "openai_api_key": self._settings.openai_api_key,
-                "minimax_api_key": self._settings.minimax_api_key,
-                "minimax_base_url": self._settings.minimax_base_url,
-                "deepseek_api_key": self._settings.deepseek_api_key,
-                "deepseek_base_url": self._settings.deepseek_base_url,
-                "futu_connection_mode": self._settings.futu_connection_mode,
-                "futu_opend_host": self._settings.futu_opend_host,
-                "futu_opend_port": self._settings.futu_opend_port,
-                "telegram_bot_token": self._settings.telegram_bot_token,
-                "telegram_allowlisted_chat_ids": list(self._settings.telegram_allowlisted_chat_ids),
-                "telegram_reports_enabled": self._settings.telegram_reports_enabled,
-                "telegram_daily_report_time": self._settings.telegram_daily_report_time,
-                "mcp_server_enabled": self._settings.mcp_server_enabled,
-                "report_cache_enabled": self._settings.report_cache_enabled,
-                "report_cache_ttl_minutes": self._settings.report_cache_ttl_minutes,
-                "last_successful_sync_at": self._settings.last_successful_sync_at,
-                "last_successful_sync_date": self._settings.last_successful_sync_date,
-            }
-        )
+        doc = {
+            "base_currency": self._settings.base_currency,
+            "timezone": self._settings.timezone,
+            "finnhub_api_key": self._settings.finnhub_api_key,
+            "flex_token": self._settings.flex_token,
+            "flex_query_id": self._settings.flex_query_id,
+            "pull_frequency_minutes": self._settings.pull_frequency_minutes,
+            "display_realtime_prices": self._settings.display_realtime_prices,
+            "ai_provider": self._settings.ai_provider,
+            "ai_model": self._settings.ai_model,
+            "openai_api_key": self._settings.openai_api_key,
+            "minimax_api_key": self._settings.minimax_api_key,
+            "minimax_base_url": self._settings.minimax_base_url,
+            "deepseek_api_key": self._settings.deepseek_api_key,
+            "deepseek_base_url": self._settings.deepseek_base_url,
+            "futu_connection_mode": self._settings.futu_connection_mode,
+            "futu_opend_host": self._settings.futu_opend_host,
+            "futu_opend_port": self._settings.futu_opend_port,
+            "telegram_bot_token": self._settings.telegram_bot_token,
+            "telegram_allowlisted_chat_ids": list(self._settings.telegram_allowlisted_chat_ids),
+            "telegram_reports_enabled": self._settings.telegram_reports_enabled,
+            "telegram_daily_report_time": self._settings.telegram_daily_report_time,
+            "mcp_server_enabled": self._settings.mcp_server_enabled,
+            "report_cache_enabled": self._settings.report_cache_enabled,
+            "report_cache_ttl_minutes": self._settings.report_cache_ttl_minutes,
+            "last_successful_sync_at": self._settings.last_successful_sync_at,
+            "last_successful_sync_date": self._settings.last_successful_sync_date,
+        }
+        self._repository.upsert_settings(_encrypt_secret_fields(doc))
 
 
 def _coerce_settings(saved: dict) -> AppSettings:
     known_fields = {field.name for field in fields(AppSettings)}
     doc = {key: value for key, value in saved.items() if key in known_fields}
+    doc = _decrypt_secret_fields(doc)
     chat_ids = doc.get("telegram_allowlisted_chat_ids")
     if chat_ids is None:
         doc["telegram_allowlisted_chat_ids"] = []
@@ -189,3 +198,133 @@ def _coerce_settings(saved: dict) -> AppSettings:
     else:
         doc["telegram_allowlisted_chat_ids"] = [str(chat_ids)]
     return AppSettings(**doc)
+
+
+SECRET_FIELDS = {
+    "finnhub_api_key",
+    "flex_token",
+    "openai_api_key",
+    "minimax_api_key",
+    "deepseek_api_key",
+    "telegram_bot_token",
+}
+ENCRYPTED_SECRET_PREFIX = "enc:v1:"
+KEY_ENV_VAR = "IBKR_DASHBOARD_SETTINGS_KEY"
+KEY_FILE_ENV_VAR = "IBKR_DASHBOARD_SETTINGS_KEY_FILE"
+
+
+def _encrypt_secret_fields(doc: dict) -> dict:
+    encrypted = dict(doc)
+    for key in SECRET_FIELDS:
+        value = encrypted.get(key)
+        if isinstance(value, str) and value:
+            encrypted[key] = _encrypt_secret(value)
+    return encrypted
+
+
+def _decrypt_secret_fields(doc: dict) -> dict:
+    decrypted = dict(doc)
+    for key in SECRET_FIELDS:
+        value = decrypted.get(key)
+        if isinstance(value, str) and value.startswith(ENCRYPTED_SECRET_PREFIX):
+            try:
+                decrypted[key] = _decrypt_secret(value)
+            except SettingsSecretError as exc:
+                raise SettingsSecretError(f"failed to decrypt settings field {key}") from exc
+    return decrypted
+
+
+def _encrypt_secret(value: str) -> str:
+    if value.startswith(ENCRYPTED_SECRET_PREFIX):
+        return value
+    key = _load_settings_key(create=True)
+    nonce = secrets.token_bytes(16)
+    plaintext = value.encode("utf-8")
+    ciphertext = _xor_bytes(plaintext, _secret_keystream(key, nonce, len(plaintext)))
+    tag = hmac.new(key, b"settings:v1:auth" + nonce + ciphertext, hashlib.sha256).digest()
+    payload = base64.urlsafe_b64encode(nonce + tag + ciphertext).decode("ascii")
+    return f"{ENCRYPTED_SECRET_PREFIX}{payload}"
+
+
+def _decrypt_secret(value: str) -> str:
+    try:
+        payload = base64.urlsafe_b64decode(value.removeprefix(ENCRYPTED_SECRET_PREFIX).encode("ascii"))
+    except Exception as exc:
+        raise SettingsSecretError("encrypted settings value is not valid base64") from exc
+    if len(payload) < 48:
+        raise SettingsSecretError("encrypted settings value is too short")
+    nonce = payload[:16]
+    tag = payload[16:48]
+    ciphertext = payload[48:]
+    key = _load_settings_key(create=False)
+    if key is None:
+        raise SettingsSecretError(
+            f"settings encryption key is missing; set {KEY_ENV_VAR} or restore the key file"
+        )
+    expected = hmac.new(key, b"settings:v1:auth" + nonce + ciphertext, hashlib.sha256).digest()
+    if not hmac.compare_digest(tag, expected):
+        raise SettingsSecretError("encrypted settings authentication failed")
+    plaintext = _xor_bytes(ciphertext, _secret_keystream(key, nonce, len(ciphertext)))
+    try:
+        return plaintext.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SettingsSecretError("encrypted settings plaintext is not valid utf-8") from exc
+
+
+def _load_settings_key(*, create: bool) -> bytes | None:
+    env_key = os.getenv(KEY_ENV_VAR)
+    if env_key:
+        return _normalize_settings_key(env_key)
+    path = _settings_key_path()
+    if path.exists():
+        return _normalize_settings_key(path.read_text(encoding="utf-8").strip())
+    if not create:
+        return None
+    key = secrets.token_urlsafe(32)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(key, encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    return _normalize_settings_key(key)
+
+
+def _settings_key_path() -> Path:
+    configured = os.getenv(KEY_FILE_ENV_VAR)
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".config" / "ibkr-dashboard" / "settings.key"
+
+
+def _normalize_settings_key(value: str) -> bytes:
+    text = value.strip()
+    for decoder in (base64.urlsafe_b64decode, base64.b64decode):
+        try:
+            decoded = decoder(_with_base64_padding(text).encode("ascii"))
+        except Exception:
+            continue
+        if decoded:
+            return hashlib.sha256(decoded).digest()
+    return hashlib.sha256(text.encode("utf-8")).digest()
+
+
+def _with_base64_padding(value: str) -> str:
+    return value + ("=" * (-len(value) % 4))
+
+
+def _secret_keystream(key: bytes, nonce: bytes, length: int) -> bytes:
+    blocks: list[bytes] = []
+    counter = 0
+    generated = 0
+    while generated < length:
+        counter_bytes = counter.to_bytes(8, "big")
+        block = hmac.new(key, b"settings:v1:stream" + nonce + counter_bytes, hashlib.sha256).digest()
+        blocks.append(block)
+        generated += len(block)
+        counter += 1
+    return b"".join(blocks)[:length]
+
+
+def _xor_bytes(left: bytes, right: bytes) -> bytes:
+    return bytes(a ^ b for a, b in zip(left, right, strict=True))
