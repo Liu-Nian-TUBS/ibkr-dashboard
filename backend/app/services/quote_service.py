@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from datetime import date
 from datetime import timedelta
 from datetime import timezone, datetime
-import importlib
 import json
 import os
 from pathlib import Path
@@ -12,6 +11,16 @@ from threading import RLock
 from time import monotonic
 from typing import Callable
 import httpx
+
+from app.utils.dates import parse_iso_date as _parse_iso_date
+from app.utils.longbridge import first_longbridge_record as _first_longbridge_record
+from app.utils.longbridge import longbridge_records as _longbridge_records
+from app.utils.longbridge import run_longbridge_json
+from app.utils.numbers import first_number as _first_number
+from app.utils.records import records as _records
+from app.utils.symbols import load_futu_module as _load_futu_module
+from app.utils.symbols import normalize_futu_symbol as _normalize_futu_symbol
+from app.utils.symbols import normalize_longbridge_symbol as _normalize_longbridge_symbol
 
 _HISTORY_CACHE_TTL_SECONDS = 30 * 60
 _history_cache: dict[tuple[str, str, str, str], tuple[float, list[dict]]] = {}
@@ -363,21 +372,17 @@ def fetch_longbridge_quote(symbol: str) -> float | None:
     return _first_number(row, ("last", "last_done", "last_price", "price", "close", "prev_close"))
 
 
-def _parse_iso_date(value: str) -> date | None:
-    if isinstance(value, str) and len(value) >= 8 and value[:8].isdigit():
-        raw = value[:8]
-        try:
-            return date(int(raw[:4]), int(raw[4:6]), int(raw[6:8]))
-        except ValueError:
-            return None
-    try:
-        return date.fromisoformat(value[:10])
-    except (TypeError, ValueError):
-        return None
-
-
 def _date_to_unix(value: date) -> int:
     return int(datetime(value.year, value.month, value.day, tzinfo=timezone.utc).timestamp())
+
+
+def _run_longbridge_json(args: list[str], *, timeout: float) -> object:
+    return run_longbridge_json(
+        args,
+        timeout=timeout,
+        executable_resolver=shutil.which,
+        runner=subprocess.run,
+    )
 
 
 def _normalize_history_points(
@@ -1076,130 +1081,6 @@ def _fetch_benchmark_history_uncached(
             client=client,
         )
     return points
-
-
-def _normalize_longbridge_symbol(symbol: str) -> str:
-    cleaned = str(symbol or "").strip().upper()
-    if not cleaned:
-        return "AAPL.US"
-    index_aliases = {
-        "^GSPC": ".SPX.US",
-        "GSPC": ".SPX.US",
-        "SP500": ".SPX.US",
-        "^IXIC": ".IXIC.US",
-        "IXIC": ".IXIC.US",
-        "COMP": ".IXIC.US",
-        "^NDX": ".NDX.US",
-        "NDX": ".NDX.US",
-        "^DJI": ".DJI.US",
-        "DJI": ".DJI.US",
-        "^VIX": ".VIX.US",
-        "VIX": ".VIX.US",
-    }
-    if cleaned in index_aliases:
-        return index_aliases[cleaned]
-    if "." in cleaned:
-        parts = cleaned.split(".")
-        if parts[0].isdigit() and parts[-1] == "HK":
-            parts[0] = str(int(parts[0]))
-            return ".".join(parts)
-        if len(parts) == 2 and parts[0].startswith("^") and parts[1] == "US":
-            return f".{parts[0][1:]}.US"
-        return cleaned
-    if cleaned.isdigit():
-        if len(cleaned) >= 4 and len(cleaned) <= 5:
-            return f"{int(cleaned)}.HK"
-        if cleaned.startswith(("6", "9")):
-            return f"{cleaned}.SH"
-        return f"{cleaned}.SZ"
-    return f"{cleaned}.US"
-
-
-def _run_longbridge_json(args: list[str], *, timeout: float) -> object:
-    executable = shutil.which("longbridge")
-    if executable is None:
-        return []
-    try:
-        completed = subprocess.run(
-            [executable, *args],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return []
-    if completed.returncode != 0 or not completed.stdout.strip():
-        return []
-    try:
-        return json.loads(completed.stdout)
-    except json.JSONDecodeError:
-        return []
-
-
-def _load_futu_module():
-    try:
-        return importlib.import_module("futu")
-    except ImportError:
-        return None
-
-
-def _normalize_futu_symbol(symbol: str) -> str:
-    cleaned = str(symbol or "").strip().upper()
-    if not cleaned:
-        return "US.AAPL"
-    if cleaned.startswith(("US.", "HK.", "SH.", "SZ.")):
-        return cleaned
-    if "." in cleaned:
-        parts = cleaned.split(".")
-        if len(parts) == 2 and parts[1] in {"US", "HK", "SH", "SZ"}:
-            return f"{parts[1]}.{parts[0]}"
-        return cleaned
-    if cleaned.isdigit():
-        if len(cleaned) == 5:
-            return f"HK.{cleaned}"
-        if cleaned.startswith(("6", "9")):
-            return f"SH.{cleaned}"
-        return f"SZ.{cleaned}"
-    return f"US.{cleaned}"
-
-
-def _longbridge_records(payload: object) -> list[dict]:
-    if isinstance(payload, list):
-        return [row for row in payload if isinstance(row, dict)]
-    if isinstance(payload, dict):
-        data = payload.get("data")
-        if isinstance(data, list):
-            return [row for row in data if isinstance(row, dict)]
-        return [payload]
-    return []
-
-
-def _first_longbridge_record(payload: object) -> dict | None:
-    rows = _longbridge_records(payload)
-    return rows[0] if rows else None
-
-
-def _records(data: object) -> list[dict]:
-    if hasattr(data, "to_dict"):
-        records = data.to_dict("records")
-        if isinstance(records, list):
-            return [record for record in records if isinstance(record, dict)]
-    if isinstance(data, list):
-        return [record for record in data if isinstance(record, dict)]
-    return []
-
-
-def _first_number(row: dict, fields: tuple[str, ...]) -> float | None:
-    for field in fields:
-        value = row.get(field)
-        if value is None:
-            continue
-        try:
-            return float(str(value).replace(",", ""))
-        except (TypeError, ValueError):
-            continue
-    return None
 
 
 def _longbridge_rank_date(value: object) -> date | None:

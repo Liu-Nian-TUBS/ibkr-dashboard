@@ -1,11 +1,6 @@
 from app.repositories.raw_repository import RawRepository
-
-
-def _to_float(value: object) -> float:
-    try:
-        return float(value or 0)
-    except (TypeError, ValueError):
-        return 0.0
+from app.utils.dates import compact_report_date as _compact_report_date
+from app.utils.numbers import to_float as _to_float
 
 
 def normalize_currency_code(value: object, fallback: str = "USD") -> str:
@@ -20,13 +15,6 @@ def _fx_currency_variants(value: object) -> list[str]:
     if code == "CNH":
         return ["CNH", "CNY"]
     return [code]
-
-
-def _compact_report_date(value: object) -> str:
-    text = str(value or "")
-    if not text:
-        return ""
-    return text[:10].replace("-", "")
 
 
 def _latest_pair_fx_rate(

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { api } from "../../lib/api";
-import type { ApiRecord, PageState } from "../../lib/contracts";
+import type { ApiRecord } from "../../lib/contracts";
+import { useApiData } from "../../lib/useApiData";
 import {
   asArray,
   asNumber,
@@ -12,7 +13,7 @@ import {
   formatDateTimeMinute,
   formatInteger,
 } from "../../lib/format";
-import { DataState, DataTable, DeltaText, Field, MetricCard, PageHeader, Pager, StatusPill, Surface } from "../../components/Primitives";
+import { DataState, DataTable, DeltaText, Field, MetricCard, PageHeader, PaginationFooter, SegmentedControl, StatusPill, Surface } from "../../components/Primitives";
 
 type TradeQuery = {
   symbol: string;
@@ -32,7 +33,6 @@ type CashFlowQuery = {
   page_size: number;
 };
 
-const PAGE_SIZE_OPTIONS = [20, 50, 100];
 type TradesTab = "trades" | "cash";
 
 export function TradesPage() {
@@ -46,10 +46,13 @@ export function TradesPage() {
         meta={<StatusPill tone="accent">只读分析</StatusPill>}
       />
 
-      <div className="trades-tabs segmented-control segmented-control--compact" role="tablist" aria-label="交易明细分类">
-        <button type="button" className={activeTab === "trades" ? "active" : ""} onClick={() => setActiveTab("trades")}>交易记录</button>
-        <button type="button" className={activeTab === "cash" ? "active" : ""} onClick={() => setActiveTab("cash")}>出入金流水</button>
-      </div>
+      <SegmentedControl
+        ariaLabel="交易明细分类"
+        className="trades-tabs segmented-control--compact"
+        options={[{ value: "trades", label: "交易记录" }, { value: "cash", label: "出入金流水" }]}
+        value={activeTab}
+        onChange={setActiveTab}
+      />
 
       {activeTab === "trades" ? <TradeRecordsPanel /> : <CashFlowsPanel />}
     </div>
@@ -58,21 +61,7 @@ export function TradesPage() {
 
 function TradeRecordsPanel() {
   const [query, setQuery] = useState<TradeQuery>({ symbol: "", side: "", start_date: "", end_date: "", page: 1, page_size: 20 });
-  const [state, setState] = useState<PageState<ApiRecord>>({ data: null, loading: true, error: null });
-
-  const load = useCallback(async () => {
-    setState((prev) => ({ ...prev, loading: true, error: null }));
-    try {
-      const data = await api.trades(query);
-      setState({ data, loading: false, error: null });
-    } catch (error) {
-      setState((prev) => ({ ...prev, loading: false, error: error instanceof Error ? error.message : "unknown error" }));
-    }
-  }, [query]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const { state, load } = useApiData<ApiRecord>(() => api.trades(query), [query]);
 
   return (
     <Surface title="交易流水" className="trades-surface">
@@ -153,21 +142,7 @@ function TradeRecordsContent({
 
 function CashFlowsPanel() {
   const [query, setQuery] = useState<CashFlowQuery>({ currency: "", flow_type: "", start_date: "", end_date: "", page: 1, page_size: 20 });
-  const [state, setState] = useState<PageState<ApiRecord>>({ data: null, loading: true, error: null });
-
-  const load = useCallback(async () => {
-    setState((prev) => ({ ...prev, loading: true, error: null }));
-    try {
-      const data = await api.cashFlows(query);
-      setState({ data, loading: false, error: null });
-    } catch (error) {
-      setState((prev) => ({ ...prev, loading: false, error: error instanceof Error ? error.message : "unknown error" }));
-    }
-  }, [query]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const { state, load } = useApiData<ApiRecord>(() => api.cashFlows(query), [query]);
 
   return (
     <Surface title="出入金流水" className="trades-surface">
@@ -279,31 +254,6 @@ function DirectionPill({
   const positive = normalized === "BUY" || normalized === "INFLOW";
   const label = positive ? buyLabel : normalized === "SELL" || normalized === "OUTFLOW" ? sellLabel : value;
   return <span className={`direction-pill direction-pill--${positive || inflow && normalized === "INFLOW" ? "positive" : "negative"}`}>{label}</span>;
-}
-
-function PaginationFooter({
-  page,
-  pageSize,
-  total,
-  onPageChange,
-  onPageSizeChange,
-}: {
-  page: number;
-  pageSize: number;
-  total: number;
-  onPageChange: (page: number) => void;
-  onPageSizeChange: (pageSize: number) => void;
-}) {
-  return (
-    <div className="pagination-footer">
-      <Field label="每页">
-        <select value={pageSize} onChange={(event) => onPageSizeChange(Number(event.target.value))}>
-          {PAGE_SIZE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-        </select>
-      </Field>
-      <Pager page={page} pageSize={pageSize} total={total} onPageChange={onPageChange} />
-    </div>
-  );
 }
 
 function getTradeCurrency(row: ApiRecord): string {

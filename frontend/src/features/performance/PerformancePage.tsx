@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
-import type { EChartsOption } from "echarts";
 import { api } from "../../lib/api";
-import type { ApiRecord, PageState } from "../../lib/contracts";
+import type { ApiRecord } from "../../lib/contracts";
+import { useApiData } from "../../lib/useApiData";
 import { EChart } from "../../components/charts/EChart";
+import { buildTradeCountChartOption } from "../../components/charts/chartOptions";
 import {
   asArray,
   asNumber,
@@ -16,8 +17,10 @@ import {
   formatMonth,
   formatNumber,
   formatPercent,
+  normalizeDateKey,
+  normalizeMonthKey,
 } from "../../lib/format";
-import { DataState, DeltaText, EmptyState, MetricCard, PageHeader, StatusPill, Surface } from "../../components/Primitives";
+import { DataState, DeltaText, EmptyState, MetricCard, PageHeader, SegmentedControl, StatusPill, Surface } from "../../components/Primitives";
 
 type CalendarMode = "month" | "year";
 
@@ -33,21 +36,7 @@ type MonthCalendarCell =
   | { empty: false; key: string; day: number; date: string; value: number; realized: number; unrealized: number };
 
 export function PerformancePage() {
-  const [state, setState] = useState<PageState<ApiRecord>>({ data: null, loading: true, error: null });
-
-  const load = useCallback(async () => {
-    setState((prev) => ({ ...prev, loading: true, error: null }));
-    try {
-      const data = await api.performance();
-      setState({ data, loading: false, error: null });
-    } catch (error) {
-      setState((prev) => ({ ...prev, loading: false, error: error instanceof Error ? error.message : "unknown error" }));
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const { state, load } = useApiData<ApiRecord>(() => api.performance());
 
   return (
     <DataState loading={state.loading} error={state.error} data={state.data} onRetry={load}>
@@ -166,10 +155,13 @@ function PerformanceContent({
                   </option>
                 ))}
               </select>
-              <div className="segmented-control segmented-control--compact" role="group" aria-label="日历维度">
-                <button type="button" className={calendarMode === "month" ? "active" : ""} onClick={() => setCalendarMode("month")}>月</button>
-                <button type="button" className={calendarMode === "year" ? "active" : ""} onClick={() => setCalendarMode("year")}>年</button>
-              </div>
+              <SegmentedControl
+                ariaLabel="日历维度"
+                className="segmented-control--compact"
+                options={[{ value: "month", label: "月" }, { value: "year", label: "年" }]}
+                value={calendarMode}
+                onChange={setCalendarMode}
+              />
             </div>
           }
         >
@@ -342,62 +334,11 @@ function TradeCountChart({ rows, currency, mode }: { rows: TradeCountRow[]; curr
   if (rows.length === 0) {
     return <EmptyState compact title="暂无交易统计" detail="导入交易记录后显示交易笔数。" />;
   }
-  const maxCount = Math.max(...rows.map((row) => row.trade_count), 1);
   const totalTrades = rows.reduce((sum, row) => sum + row.trade_count, 0);
   const totalNotional = rows.reduce((sum, row) => sum + row.trade_notional_abs, 0);
   const averageTrades = totalTrades / rows.length;
   const averageLabel = mode === "month" ? "日均交易" : "月均交易";
-  const option: EChartsOption = {
-    animationDuration: 240,
-    grid: { left: 32, right: 8, top: 12, bottom: 24, containLabel: true },
-    tooltip: {
-      trigger: "axis",
-      borderColor: "#20231f",
-      backgroundColor: "rgba(255,255,255,0.98)",
-      textStyle: { color: "#20231f", fontSize: 12, fontWeight: 700 },
-      axisPointer: { type: "shadow", shadowStyle: { color: "rgba(32,35,31,0.06)" } },
-      formatter: (params) => {
-        const item = Array.isArray(params) ? params[0] : params;
-        const row = rows[asNumber((item as { dataIndex?: unknown }).dataIndex, -1)];
-        const count = asNumber((item as { value?: unknown }).value, 0);
-        return [
-          `<strong>${row?.key ?? asText((item as { axisValue?: unknown }).axisValue, "")}</strong>`,
-          `交易笔数 ${formatInteger(count)}`,
-          row ? `交易额 ${formatCurrency(row.trade_notional_abs, currency)}` : "",
-        ].filter(Boolean).join("<br/>");
-      },
-    },
-    xAxis: {
-      type: "category",
-      data: rows.map((row) => row.label),
-      axisTick: { show: false },
-      axisLine: { lineStyle: { color: "#20231f" } },
-      axisLabel: { color: "#5d6558", fontSize: 11, fontWeight: 800, hideOverlap: true },
-    },
-    yAxis: {
-      type: "value",
-      min: 0,
-      max: Math.max(maxCount, 1),
-      splitNumber: 3,
-      axisLabel: { color: "#5d6558", fontSize: 11, fontWeight: 800, formatter: (value: number) => formatInteger(value) },
-      splitLine: { lineStyle: { color: "rgba(32,35,31,0.13)", type: "dashed" } },
-    },
-    series: [
-      {
-        name: "交易笔数",
-        type: "bar",
-        data: rows.map((row) => row.trade_count),
-        barMaxWidth: 22,
-        itemStyle: {
-          color: "#20231f",
-          borderRadius: [4, 4, 0, 0],
-        },
-        emphasis: {
-          itemStyle: { color: "#4b5147" },
-        },
-      },
-    ],
-  };
+  const option = buildTradeCountChartOption({ rows, currency });
 
   return (
     <div className="monthly-trade-chart">
@@ -500,20 +441,6 @@ function buildYearTradeRows(rows: ApiRecord[], selectedYear: string): TradeCount
     const month = `${selectedYear}-${String(index + 1).padStart(2, "0")}`;
     return monthly.get(month) ?? { key: month, label: month.slice(5, 7), trade_count: 0, trade_notional_abs: 0 };
   });
-}
-
-function normalizeDateKey(value: unknown): string {
-  const text = asText(value, "");
-  const digits = text.replace(/\D/g, "");
-  if (digits.length < 8) return "";
-  return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
-}
-
-function normalizeMonthKey(value: unknown): string {
-  const text = asText(value, "");
-  const digits = text.replace(/\D/g, "");
-  if (digits.length < 6) return "";
-  return `${digits.slice(0, 4)}-${digits.slice(4, 6)}`;
 }
 
 function getPnlHeatStyle(value: number, maxAbs: number): CSSProperties {

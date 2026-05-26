@@ -1,12 +1,13 @@
 from fastapi import APIRouter
 from fastapi import HTTPException
 
-from app.api.currency_conversion import normalize_currency_code
 from app.api.response_models import STORAGE_UNAVAILABLE_OPENAPI_RESPONSE
 from app.api.time_normalization import normalize_date_to_iso
 from app.api.time_normalization import normalize_month_bucket
 from app.repositories.raw_repository import RawRepository
+from app.services.account_currency import resolve_activity_display_currency
 from app.services.settings_service import SettingsService
+from app.utils.numbers import to_float as _to_float
 
 router = APIRouter()
 _raw_repository: RawRepository | object | None = None
@@ -43,7 +44,7 @@ def list_cash_flows(
     normalized_page = max(page, 1)
     normalized_page_size = max(min(page_size, 100), 1)
     if _raw_repository is None:
-        display_currency = _resolve_cash_flow_display_currency([], normalized_currency)
+        display_currency = resolve_activity_display_currency(_raw_repository, [], selected_currency=normalized_currency)
         return {
             "filters": {
                 "currency": normalized_currency,
@@ -160,7 +161,11 @@ def list_cash_flows(
         monthly_stats[month]["net_amount"] = float(monthly_stats[month]["net_amount"]) + amount
     monthly_rows = list(monthly_stats.values())
     monthly_rows.sort(key=lambda row: str(row["month"]), reverse=True)
-    display_currency = _resolve_cash_flow_display_currency(filtered_items, normalized_currency)
+    display_currency = resolve_activity_display_currency(
+        _raw_repository,
+        filtered_items,
+        selected_currency=normalized_currency,
+    )
     return {
         "filters": {
             "currency": normalized_currency,
@@ -221,7 +226,6 @@ def _load_cash_transaction_flows(raw_repository: RawRepository | object) -> list
         items.append(enriched)
     return items
 
-
 def _load_statement_funds_flows(raw_repository: RawRepository | object) -> list[dict]:
     rows = raw_repository.es.search(
         index="ibkr_stmt_funds_lines_v1",
@@ -244,34 +248,3 @@ def _load_statement_funds_flows(raw_repository: RawRepository | object) -> list[
         enriched["settle_date"] = str(row.get("settle_date") or row.get("settleDate") or row.get("report_date") or "")
         items.append(enriched)
     return items
-
-
-def _to_float(value: object) -> float:
-    try:
-        return float(value or 0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _resolve_cash_flow_display_currency(items: list[dict], selected_currency: str | None) -> str:
-    selected = normalize_currency_code(selected_currency, "")
-    if selected:
-        return selected
-    account_currency = _resolve_account_base_currency()
-    currencies = {normalize_currency_code(item.get("currency"), "") for item in items}
-    currencies.discard("")
-    if len(currencies) == 1 and account_currency == "USD":
-        return next(iter(currencies))
-    return account_currency
-
-
-def _resolve_account_base_currency() -> str:
-    if _raw_repository is not None:
-        try:
-            latest = _raw_repository.get_latest_account_snapshot()
-        except Exception:
-            latest = None
-        code = normalize_currency_code((latest or {}).get("base_currency"), "")
-        if code:
-            return code
-    return "USD"

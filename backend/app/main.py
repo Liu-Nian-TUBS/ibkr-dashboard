@@ -85,9 +85,7 @@ from app.services.daily_performance_service import DailyPerformanceService
 from app.services.flex_client import FlexStatementClient
 from app.services.quote_service import QuoteService, fetch_benchmark_history, fetch_finnhub_quote, fetch_longbridge_quote, fetch_yahoo_quote
 from app.services.ingestion_service import IngestionService
-from app.services.market_data_provider import FutuOpenDReadOnlyProvider
-from app.services.market_data_provider import LongbridgeReadOnlyProvider
-from app.services.market_data_provider import QuoteFallbackMarketDataProvider
+from app.services.market_data_provider import build_market_data_provider
 from app.services.manual_backfill_service import ManualBackfillService
 from app.services.portfolio_analysis_service import PortfolioAnalysisService
 from app.services.settings_service import SettingsService
@@ -156,6 +154,7 @@ required_indexes = [
     "reconciliation_results_v1",
     "app_settings_v1",
     "symbol_industry_overrides_v1",
+    "portfolio_ai_analysis_cache_v1",
 ]
 
 
@@ -310,15 +309,7 @@ def execute_scheduled_daily_sync() -> None:
 
 def _build_telegram_command_service() -> TelegramCommandService:
     settings = settings_service.get()
-    if settings.futu_connection_mode == "local_opend":
-        market_data_provider = FutuOpenDReadOnlyProvider(
-            host=settings.futu_opend_host,
-            port=settings.futu_opend_port,
-        )
-    elif settings.futu_connection_mode == "longbridge":
-        market_data_provider = LongbridgeReadOnlyProvider()
-    else:
-        market_data_provider = QuoteFallbackMarketDataProvider(_quote_service_instance)
+    market_data_provider = build_market_data_provider(settings, _quote_service_instance)
     analysis_service = PortfolioAnalysisService(
         raw_repository=raw_repository,
         settings_service=settings_service,

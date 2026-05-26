@@ -28,6 +28,26 @@ export function asText(value: unknown, fallback = "-"): string {
   return String(value);
 }
 
+export function recordObject(record: ApiRecord, key: string): ApiRecord {
+  return asRecord(record[key]);
+}
+
+export function recordArray(record: ApiRecord, key: string): ApiRecord[] {
+  return asArray(record[key]);
+}
+
+export function recordText(record: ApiRecord, key: string, fallback = ""): string {
+  return asText(record[key], fallback);
+}
+
+export function recordNumber(record: ApiRecord, key: string): number | null {
+  return asOptionalNumber(record[key]);
+}
+
+export function recordBool(record: ApiRecord, key: string): boolean {
+  return record[key] === true;
+}
+
 export function formatNumber(value: unknown, digits = 2): string {
   const parsed = asOptionalNumber(value);
   if (parsed === null) return "-";
@@ -77,6 +97,62 @@ export function formatDate(value: unknown): string {
   if (/^\d{8}$/.test(text)) return `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`;
   if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
   return text;
+}
+
+export function normalizeIsoDate(value: unknown): string {
+  const text = asText(value, "");
+  if (!text) return "";
+  const digits = text.replace(/\D/g, "");
+  if (digits.length >= 8) return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
+  return "";
+}
+
+export function normalizeDateKey(value: unknown): string {
+  return normalizeIsoDate(value);
+}
+
+export function normalizeMonthKey(value: unknown): string {
+  const text = asText(value, "");
+  const digits = text.replace(/\D/g, "");
+  if (digits.length < 6) return "";
+  return `${digits.slice(0, 4)}-${digits.slice(4, 6)}`;
+}
+
+export function dateFromIso(value: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+export function dateToTime(value: string): number {
+  return dateFromIso(value)?.getTime() ?? 0;
+}
+
+export function isoFromDate(value: Date): string {
+  const year = value.getFullYear();
+  const month = `${value.getMonth() + 1}`.padStart(2, "0");
+  const day = `${value.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+export function addDays(value: Date, days: number): Date {
+  const next = new Date(value);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+export function addMonths(value: Date, months: number): Date {
+  const next = new Date(value);
+  next.setMonth(next.getMonth() + months);
+  return next;
+}
+
+export function daysBetween(start: string, end: string): number {
+  const startDate = dateFromIso(start);
+  const endDate = dateFromIso(end);
+  if (!startDate || !endDate) return 0;
+  return Math.round((endDate.getTime() - startDate.getTime()) / 86400000);
 }
 
 export function formatDateTimeMinute(value: unknown): string {

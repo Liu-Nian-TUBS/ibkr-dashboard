@@ -2,9 +2,7 @@ from pydantic import BaseModel
 from fastapi import APIRouter
 
 from app.api.response_models import STORAGE_UNAVAILABLE_OPENAPI_RESPONSE
-from app.services.market_data_provider import FutuOpenDReadOnlyProvider
-from app.services.market_data_provider import LongbridgeReadOnlyProvider
-from app.services.market_data_provider import QuoteFallbackMarketDataProvider
+from app.services.market_data_provider import build_market_data_provider
 from app.services.portfolio_analysis_service import PortfolioAnalysisService
 from app.services.quote_service import QuoteService
 from app.services.settings_service import SettingsService
@@ -59,12 +57,7 @@ def dry_run_telegram_report() -> dict[str, object]:
 
 def _telegram_command_service() -> TelegramCommandService:
     settings = _settings_service.get()
-    if settings.futu_connection_mode == "local_opend":
-        provider = FutuOpenDReadOnlyProvider(host=settings.futu_opend_host, port=settings.futu_opend_port)
-    elif settings.futu_connection_mode == "longbridge":
-        provider = LongbridgeReadOnlyProvider()
-    else:
-        provider = QuoteFallbackMarketDataProvider(_quote_service)
+    provider = build_market_data_provider(settings, _quote_service)
     analysis_service = PortfolioAnalysisService(
         raw_repository=_raw_repository,
         settings_service=_settings_service,

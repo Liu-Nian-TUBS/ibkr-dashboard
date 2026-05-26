@@ -15,7 +15,11 @@ from app.services.quote_service import fetch_longbridge_candles
 from app.services.quote_service import fetch_longbridge_valuation_rank
 from app.services.quote_service import fetch_nasdaq_candles
 from app.services.quote_service import fetch_yahoo_candles
+from app.services.account_currency import resolve_account_base_currency as _resolve_account_base_currency
 from app.services.settings_service import SettingsService
+from app.utils.dates import compact_date as _compact_date
+from app.utils.numbers import optional_float as _optional_float
+from app.utils.numbers import to_float as _to_float
 
 router = APIRouter()
 _raw_repository: RawRepository | object | None = None
@@ -196,7 +200,7 @@ def _identity_currency_conversion(source_currency: str, display_currency: str) -
 
 
 def _resolve_currency_context(items: list[dict]) -> dict:
-    account_base_currency = _resolve_account_base_currency(items)
+    account_base_currency = _resolve_account_base_currency(_raw_repository, items)
     conversion = _identity_currency_conversion(account_base_currency, account_base_currency)
     rate = float(conversion.get("rate") or 1.0)
     return {
@@ -205,18 +209,6 @@ def _resolve_currency_context(items: list[dict]) -> dict:
         "currency_conversion": {**conversion, "rate": round(rate, 8)},
         "rate": rate,
     }
-
-
-def _resolve_account_base_currency(items: list[dict]) -> str:
-    latest = _raw_repository.get_latest_account_snapshot() if _raw_repository is not None else None
-    candidates: list[object] = [(latest or {}).get("base_currency")]
-    candidates.extend(item.get("base_currency") for item in items)
-    candidates.extend(item.get("currency") for item in items)
-    for candidate in candidates:
-        code = normalize_currency_code(candidate, "")
-        if code:
-            return code
-    return "USD"
 
 
 def _list_current_positions(symbol: str | None = None) -> list[dict]:
@@ -828,26 +820,3 @@ def _enrich_positions(items: list[dict], *, fx_rate: float) -> list[dict]:
 
         enriched.append(pos)
     return enriched
-
-
-def _compact_date(value: object) -> str:
-    text = str(value or "")
-    digits = "".join(ch for ch in text if ch.isdigit())
-    return digits[:8]
-
-
-def _to_float(value: object) -> float:
-    try:
-        return float(value or 0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _optional_float(value: object) -> float | None:
-    if value is None or value == "":
-        return None
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed

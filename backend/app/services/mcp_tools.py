@@ -1,9 +1,10 @@
 from typing import Any
 
 from app.api.portfolio_analysis_contracts import PortfolioAnalysisSectionKey
-from app.services.market_data_provider import QuoteFallbackMarketDataProvider
+from app.services.market_data_provider import build_market_data_provider
 from app.services.portfolio_analysis_service import PortfolioAnalysisService
 from app.services.settings_service import SettingsService
+from app.utils.numbers import to_float as _to_float
 
 
 READ_ONLY_TOOLS = [
@@ -31,10 +32,11 @@ class ReadOnlyMCPTools:
         self._raw = raw_repository
         self._derived = derived_repository
         self._settings = settings_service
+        market_data_provider = build_market_data_provider(settings_service.get(), quote_service)
         self._analysis = PortfolioAnalysisService(
             raw_repository=raw_repository,
             settings_service=settings_service,
-            market_data_provider=QuoteFallbackMarketDataProvider(quote_service),
+            market_data_provider=market_data_provider,
         )
 
     def list_tools(self) -> list[dict[str, Any]]:
@@ -166,10 +168,3 @@ class ReadOnlyMCPTools:
             return rows
         latest_date = max(dates)
         return [row for row in rows if str(row.get("report_date", "") or "") == latest_date]
-
-
-def _to_float(value: object) -> float:
-    try:
-        return float(value or 0)
-    except (TypeError, ValueError):
-        return 0.0

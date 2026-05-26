@@ -16,6 +16,7 @@
   --negative: #c23a32;
   --warning: #b37b16;
   --grid-dot: rgba(21, 23, 18, 0.08);
+  --grid-dot-bg: radial-gradient(circle at 1px 1px, var(--grid-dot) 1px, transparent 0);
   --violet: #5c5a97;
   --shadow: 0 12px 34px rgba(21, 23, 18, 0.08);
   --hard-shadow: 6px 6px 0 rgba(21, 23, 18, 0.08);
@@ -30,7 +31,7 @@ body {
   min-width: 320px;
   min-height: 100vh;
   background:
-    radial-gradient(circle at 1px 1px, var(--grid-dot) 1px, transparent 0),
+    var(--grid-dot-bg),
     linear-gradient(90deg, rgba(21, 23, 18, 0.035) 1px, transparent 1px),
     linear-gradient(rgba(21, 23, 18, 0.03) 1px, transparent 1px),
     var(--paper);
@@ -113,7 +114,7 @@ input[type="file"] {
   padding: 20px 12px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(244, 245, 240, 0.96)),
-    radial-gradient(circle at 1px 1px, rgba(21, 23, 18, 0.08) 1px, transparent 0);
+    var(--grid-dot-bg);
   background-size: auto, 14px 14px;
   border-right: 1px solid var(--line);
   box-shadow: 12px 0 34px rgba(21, 23, 18, 0.05);
@@ -377,7 +378,7 @@ input[type="file"] {
   border-color: var(--ink);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.9)),
-    radial-gradient(circle at 1px 1px, rgba(21, 23, 18, 0.08) 1px, transparent 0);
+    var(--grid-dot-bg);
   background-size: auto, 14px 14px;
   box-shadow: var(--hard-shadow);
 }
@@ -415,18 +416,34 @@ input[type="file"] {
   line-height: 1.35;
 }
 
+.metric-card--accent,
+.metric-card--positive,
+.metric-card--negative,
+.portfolio-kpi-card--positive,
+.portfolio-kpi-card--negative,
+.portfolio-kpi-card--accent,
+.market-kpi--positive,
+.market-kpi--negative,
+.market-kpi--accent,
+.market-today-brief,
+.risk-alert,
+.risk-summary,
+.portfolio-ai-status {
+  box-shadow: inset 4px 0 0 var(--left-strip);
+}
+
 .metric-card--accent {
+  --left-strip: var(--accent);
   border-color: rgba(21, 23, 18, 0.35);
-  box-shadow: inset 4px 0 0 var(--accent);
 }
 
 .metric-card--positive {
-  box-shadow: inset 4px 0 0 var(--positive);
+  --left-strip: var(--positive);
   border-color: rgba(15, 122, 77, 0.28);
 }
 
 .metric-card--negative {
-  box-shadow: inset 4px 0 0 var(--negative);
+  --left-strip: var(--negative);
   border-color: rgba(194, 58, 50, 0.28);
 }
 
@@ -585,15 +602,15 @@ input[type="file"] {
 }
 
 .portfolio-kpi-card--positive {
-  box-shadow: inset 4px 0 0 var(--positive);
+  --left-strip: var(--positive);
 }
 
 .portfolio-kpi-card--negative {
-  box-shadow: inset 4px 0 0 var(--negative);
+  --left-strip: var(--negative);
 }
 
 .portfolio-kpi-card--accent {
-  box-shadow: inset 4px 0 0 var(--accent-2);
+  --left-strip: var(--accent-2);
 }
 
 .analysis-icon {
@@ -745,15 +762,15 @@ input[type="file"] {
 }
 
 .market-kpi--positive {
-  box-shadow: inset 4px 0 0 var(--positive);
+  --left-strip: var(--positive);
 }
 
 .market-kpi--negative {
-  box-shadow: inset 4px 0 0 var(--negative);
+  --left-strip: var(--negative);
 }
 
 .market-kpi--accent {
-  box-shadow: inset 4px 0 0 var(--accent-2);
+  --left-strip: var(--accent-2);
 }
 
 .market-brief-grid {
@@ -763,6 +780,7 @@ input[type="file"] {
 }
 
 .market-today-brief {
+  --left-strip: #cbd2c4;
   display: grid;
   gap: 8px;
   min-height: 112px;
@@ -770,23 +788,22 @@ input[type="file"] {
   border: 1px solid var(--line);
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.86);
-  box-shadow: inset 4px 0 0 #cbd2c4;
 }
 
 .market-today-brief--positive {
-  box-shadow: inset 4px 0 0 #13a06f;
+  --left-strip: #13a06f;
 }
 
 .market-today-brief--warning {
-  box-shadow: inset 4px 0 0 #d9a521;
+  --left-strip: #d9a521;
 }
 
 .market-today-brief--negative {
-  box-shadow: inset 4px 0 0 #c04463;
+  --left-strip: #c04463;
 }
 
 .market-today-brief--accent {
-  box-shadow: inset 4px 0 0 #7f4bc9;
+  --left-strip: #7f4bc9;
 }
 
 .market-today-brief__headline {
@@ -876,7 +893,7 @@ input[type="file"] {
   border-radius: 6px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 255, 255, 0.88)),
-    radial-gradient(circle at 8px 8px, rgba(32, 35, 31, 0.08) 1px, transparent 1.5px);
+    var(--grid-dot-bg);
   background-size: auto, 16px 16px;
 }
 
@@ -1288,25 +1305,25 @@ input[type="file"] {
 }
 
 .risk-alert {
+  --left-strip: #cbd2c4;
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
   display: grid;
   gap: 6px;
-  box-shadow: inset 4px 0 0 #cbd2c4;
 }
 
 .risk-alert--high {
-  box-shadow: inset 4px 0 0 var(--negative);
+  --left-strip: var(--negative);
 }
 
 .risk-alert--medium {
-  box-shadow: inset 4px 0 0 #d6a619;
+  --left-strip: #d6a619;
 }
 
 .risk-alert--low {
-  box-shadow: inset 4px 0 0 var(--accent);
+  --left-strip: var(--accent);
 }
 
 .risk-alert span {
@@ -1331,6 +1348,7 @@ input[type="file"] {
 }
 
 .risk-summary {
+  --left-strip: transparent;
   display: grid;
   grid-template-columns: 72px minmax(126px, 0.35fr) minmax(0, 1fr);
   gap: 10px;
@@ -1342,11 +1360,11 @@ input[type="file"] {
 }
 
 .risk-summary--high {
-  box-shadow: inset 4px 0 0 var(--negative);
+  --left-strip: var(--negative);
 }
 
 .risk-summary--medium {
-  box-shadow: inset 4px 0 0 #d6a619;
+  --left-strip: #d6a619;
 }
 
 .risk-summary span {
@@ -1377,6 +1395,7 @@ input[type="file"] {
 }
 
 .portfolio-ai-status {
+  --left-strip: transparent;
   display: grid;
   gap: 4px;
   margin-bottom: 0;
@@ -1398,17 +1417,17 @@ input[type="file"] {
 
 .portfolio-ai-status--ready {
   border-color: rgba(20, 122, 74, 0.28);
-  box-shadow: inset 4px 0 0 var(--positive);
+  --left-strip: var(--positive);
 }
 
 .portfolio-ai-status--pending {
   border-color: rgba(160, 90, 22, 0.28);
-  box-shadow: inset 4px 0 0 var(--accent-2);
+  --left-strip: var(--accent-2);
 }
 
 .portfolio-ai-status--fallback {
   border-color: rgba(177, 58, 50, 0.24);
-  box-shadow: inset 4px 0 0 var(--negative);
+  --left-strip: var(--negative);
 }
 
 .portfolio-risk-table {
@@ -3074,11 +3093,13 @@ input[type="file"] {
   color: var(--muted);
 }
 
-.delta-text--positive {
+.delta-text--positive,
+.delta-text.positive {
   color: var(--positive);
 }
 
-.delta-text--negative {
+.delta-text--negative,
+.delta-text.negative {
   color: var(--negative);
 }
 
@@ -3539,6 +3560,9 @@ input[type="file"] {
 .positions-chart-surface {
   padding: 16px;
   gap: 12px;
+  min-width: 0;
+  overflow: hidden;
+  container-type: inline-size;
   background:
     linear-gradient(90deg, rgba(32, 35, 31, 0.035) 1px, transparent 1px),
     linear-gradient(rgba(32, 35, 31, 0.03) 1px, transparent 1px),
@@ -3555,12 +3579,15 @@ input[type="file"] {
 }
 
 .positions-chart-surface .pie-panel {
-  grid-template-columns: minmax(380px, 1.25fr) minmax(210px, 0.7fr);
-  gap: 22px;
+  grid-template-columns: minmax(0, 1fr) minmax(128px, 0.72fr);
+  gap: 14px;
+  min-width: 0;
+  width: 100%;
 }
 
 .positions-chart-surface .pie-chart-shell {
-  width: min(430px, 100%);
+  width: min(280px, 100%);
+  min-width: 0;
 }
 
 .positions-chart-surface .pie-chart-shell svg {
@@ -3588,8 +3615,10 @@ input[type="file"] {
 
 .positions-chart-surface .pie-legend {
   gap: 6px;
-  max-height: 360px;
-  padding: 4px 4px 4px 0;
+  max-height: 300px;
+  min-width: 0;
+  width: 100%;
+  padding: 4px 2px 4px 0;
 }
 
 .positions-chart-surface .pie-legend button {
@@ -3597,6 +3626,8 @@ input[type="file"] {
   grid-template-columns: 10px minmax(0, 1fr) auto;
   gap: 8px;
   padding: 0 8px;
+  min-width: 0;
+  width: 100%;
   border: 1px solid transparent;
   border-radius: 6px;
   font-size: 13px;
@@ -3764,15 +3795,36 @@ input[type="file"] {
 .industry-editor {
   display: grid;
   gap: 10px;
+  min-width: 0;
   padding-top: 12px;
   border-top: 1px solid var(--line);
 }
 
 .industry-editor__form {
   display: grid;
-  grid-template-columns: minmax(120px, 0.75fr) minmax(180px, 1.4fr) auto auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   align-items: end;
+  min-width: 0;
+}
+
+.industry-editor__form button {
+  min-width: 0;
+  width: 100%;
+}
+
+@container (max-width: 410px) {
+  .positions-chart-surface .pie-panel {
+    grid-template-columns: minmax(0, 1fr) minmax(128px, 0.72fr);
+  }
+
+  .positions-chart-surface .pie-chart-shell {
+    width: min(300px, 100%);
+  }
+
+  .positions-chart-surface .pie-legend {
+    max-height: 190px;
+  }
 }
 
 .bar-row {
@@ -4490,14 +4542,6 @@ input[type="file"] {
   color: var(--negative);
 }
 
-.delta-text.positive {
-  color: var(--positive);
-}
-
-.delta-text.negative {
-  color: var(--negative);
-}
-
 .delta-text.neutral {
   color: var(--muted);
 }
@@ -4831,6 +4875,10 @@ input[type="file"] {
 
   .pie-panel {
     grid-template-columns: 1fr;
+  }
+
+  .positions-chart-surface .pie-panel {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .pnl-calendar--year {

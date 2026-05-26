@@ -8,6 +8,10 @@ from app.repositories.derived_repository import DerivedRepository
 from app.repositories.raw_repository import RawRepository
 from app.services.analytics_service import simple_return
 from app.services.settings_service import SettingsService
+from app.services.trade_aggregation import build_monthly_trade_stats as _aggregate_monthly_trade_stats
+from app.utils.dates import compact_date as _compact_date
+from app.utils.numbers import optional_float as _optional_float
+from app.utils.numbers import to_float as _to_float
 
 router = APIRouter()
 _derived_store: dict[str, dict] = {}
@@ -636,7 +640,7 @@ def _build_monthly_trade_stats(
         size=10000,
         term_filters=term_filters or None,
     )
-    monthly: dict[str, dict] = {}
+    filtered: list[dict] = []
     for trade in trades:
         trade_date = _compact_date(trade.get("trade_date"))
         if not trade_date:
@@ -645,21 +649,13 @@ def _build_monthly_trade_stats(
             continue
         if end_date and trade_date > end_date:
             continue
-        month = trade_date[:6]
-        qty = float(trade.get("quantity", 0) or 0)
-        price = float(trade.get("trade_price", 0) or 0)
-        notional_abs = abs(qty * price)
-        bucket = monthly.setdefault(
-            month,
-            {"month": month, "trade_count": 0, "trade_notional_abs": 0.0},
-        )
-        bucket["trade_count"] = int(bucket["trade_count"]) + 1
-        bucket["trade_notional_abs"] = float(bucket["trade_notional_abs"]) + notional_abs
-    rows = list(monthly.values())
-    rows.sort(key=lambda row: str(row["month"]), reverse=True)
-    recent = rows[:12]
-    recent.sort(key=lambda row: str(row["month"]))
-    return recent
+        filtered.append(trade)
+    return _aggregate_monthly_trade_stats(
+        filtered,
+        month_for_trade=lambda trade: _compact_date(trade.get("trade_date"))[:6] or None,
+        value_key="trade_notional_abs",
+        chronological=True,
+    )
 
 
 def _build_daily_trade_stats(
@@ -699,29 +695,6 @@ def _build_daily_trade_stats(
     rows = list(daily.values())
     rows.sort(key=lambda row: str(row["date"]))
     return rows
-
-
-def _compact_date(value: object) -> str:
-    text = str(value or "")
-    digits = "".join(ch for ch in text if ch.isdigit())
-    return digits[:8]
-
-
-def _to_float(value: object) -> float:
-    try:
-        return float(value or 0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _optional_float(value: object) -> float | None:
-    if value is None or value == "":
-        return None
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed
 
 
 @router.post(

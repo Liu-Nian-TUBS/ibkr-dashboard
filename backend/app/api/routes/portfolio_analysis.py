@@ -9,9 +9,7 @@ from app.api.response_models import STORAGE_UNAVAILABLE_OPENAPI_RESPONSE
 from app.repositories.raw_repository import RawRepository
 from app.services.ai_narrative_service import AINarrativeService
 from app.services.industry_mapping_service import IndustryMappingService
-from app.services.market_data_provider import FutuOpenDReadOnlyProvider
-from app.services.market_data_provider import LongbridgeReadOnlyProvider
-from app.services.market_data_provider import QuoteFallbackMarketDataProvider
+from app.services.market_data_provider import build_market_data_provider
 from app.services.portfolio_analysis_service import PortfolioAnalysisService
 from app.services.quote_service import QuoteService
 from app.services.settings_service import SettingsService
@@ -83,12 +81,7 @@ def refresh_portfolio_analysis_narrative(
 
 def _build_service() -> PortfolioAnalysisService:
     settings = _settings_service.get()
-    if settings.futu_connection_mode == "local_opend":
-        provider = FutuOpenDReadOnlyProvider(host=settings.futu_opend_host, port=settings.futu_opend_port)
-    elif settings.futu_connection_mode == "longbridge":
-        provider = LongbridgeReadOnlyProvider()
-    else:
-        provider = QuoteFallbackMarketDataProvider(quote_service=_quote_service)
+    provider = build_market_data_provider(settings, _quote_service)
     return PortfolioAnalysisService(
         raw_repository=_raw_repository,
         settings_service=_settings_service,

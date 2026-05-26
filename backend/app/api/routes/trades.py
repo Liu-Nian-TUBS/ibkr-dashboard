@@ -1,12 +1,13 @@
 from fastapi import APIRouter
 from fastapi import HTTPException
 
-from app.api.currency_conversion import normalize_currency_code
 from app.api.response_models import STORAGE_UNAVAILABLE_OPENAPI_RESPONSE
 from app.api.time_normalization import normalize_date_to_iso
 from app.api.time_normalization import normalize_month_bucket
 from app.repositories.raw_repository import RawRepository
+from app.services.account_currency import resolve_activity_display_currency
 from app.services.settings_service import SettingsService
+from app.services.trade_aggregation import build_monthly_trade_stats
 
 router = APIRouter()
 _raw_repository: RawRepository | object | None = None
@@ -43,7 +44,11 @@ def list_trades(
     normalized_page = max(page, 1)
     normalized_page_size = max(min(page_size, 100), 1)
     if _raw_repository is None:
-        display_currency = _resolve_trade_display_currency([])
+        display_currency = resolve_activity_display_currency(
+            _raw_repository,
+            [],
+            currency_keys=("notional_currency", "currency"),
+        )
         return {
             "filters": {
                 "symbol": normalized_symbol,
@@ -104,10 +109,18 @@ def list_trades(
     offset = (normalized_page - 1) * normalized_page_size
     normalized_items = all_filtered[offset : offset + normalized_page_size]
     summary = _build_trades_summary(all_filtered)
-    display_currency = _resolve_trade_display_currency(all_filtered)
-    monthly_stats = _build_monthly_trade_stats(
+    display_currency = resolve_activity_display_currency(
+        _raw_repository,
         all_filtered,
-        timezone_name=_settings_service.get().timezone,
+        currency_keys=("notional_currency", "currency"),
+    )
+    monthly_stats = build_monthly_trade_stats(
+        all_filtered,
+        month_for_trade=lambda trade: normalize_month_bucket(
+            trade.get("trade_date"),
+            timezone_name=_settings_service.get().timezone,
+        ),
+        value_key="notional_abs_sum",
     )
     return {
         "filters": {
@@ -182,24 +195,6 @@ def _build_trades_summary(trades: list[dict]) -> dict:
     }
 
 
-def _build_monthly_trade_stats(trades: list[dict], *, timezone_name: str) -> list[dict]:
-    grouped: dict[str, dict[str, float | int]] = {}
-    for trade in trades:
-        month = normalize_month_bucket(trade.get("trade_date"), timezone_name=timezone_name)
-        if not month:
-            continue
-        qty = float(trade.get("quantity", 0) or 0)
-        price = float(trade.get("trade_price", 0) or 0)
-        notional = abs(qty * price)
-        if month not in grouped:
-            grouped[month] = {"month": month, "trade_count": 0, "notional_abs_sum": 0.0}
-        grouped[month]["trade_count"] = int(grouped[month]["trade_count"]) + 1
-        grouped[month]["notional_abs_sum"] = float(grouped[month]["notional_abs_sum"]) + notional
-    rows = list(grouped.values())
-    rows.sort(key=lambda row: str(row["month"]), reverse=True)
-    return rows[:12]
-
-
 def _enrich_trade_item(item: dict) -> dict:
     enriched = dict(item)
     quantity = float(item.get("quantity", 0) or 0)
@@ -217,30 +212,6 @@ def _enrich_trade_item(item: dict) -> dict:
     enriched["notional_signed"] = notional_signed
     enriched["notional_currency"] = currency
     return enriched
-
-
-def _resolve_trade_display_currency(trades: list[dict]) -> str:
-    account_currency = _resolve_account_base_currency()
-    currencies = {
-        normalize_currency_code(trade.get("notional_currency", trade.get("currency")), "")
-        for trade in trades
-    }
-    currencies.discard("")
-    if len(currencies) == 1 and account_currency == "USD":
-        return next(iter(currencies))
-    return account_currency
-
-
-def _resolve_account_base_currency() -> str:
-    if _raw_repository is not None:
-        try:
-            latest = _raw_repository.get_latest_account_snapshot()
-        except Exception:
-            latest = None
-        code = normalize_currency_code((latest or {}).get("base_currency"), "")
-        if code:
-            return code
-    return "USD"
 
 
 def _resolve_default_account_id() -> str | None:

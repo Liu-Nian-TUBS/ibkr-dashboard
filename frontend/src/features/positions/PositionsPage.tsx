@@ -23,20 +23,20 @@ import {
   LoadingBlock,
   MetricCard,
   PageHeader,
-  Pager,
+  PaginationFooter,
+  SegmentedControl,
   StatusPill,
   Surface,
   Toolbar,
 } from "../../components/Primitives";
+import { useApiData } from "../../lib/useApiData";
 
-interface PositionState {
+interface PositionData {
   positions: ApiRecord | null;
   allPositions: ApiRecord | null;
   industry: ApiRecord | null;
   industryMappings: ApiRecord | null;
   overview: ApiRecord | null;
-  loading: boolean;
-  error: string | null;
 }
 
 type CostMode = "moving" | "adjusted";
@@ -75,58 +75,41 @@ export function PositionsPage() {
   const [mappingDraft, setMappingDraft] = useState({ symbol: "", industry: "" });
   const [mappingSaving, setMappingSaving] = useState(false);
   const [mappingMessage, setMappingMessage] = useState<string | null>(null);
-  const [state, setState] = useState<PositionState>({
-    positions: null,
-    allPositions: null,
-    industry: null,
-    industryMappings: null,
-    overview: null,
-    loading: true,
-    error: null,
-  });
-
-  const load = useCallback(async () => {
-    setState((prev) => ({ ...prev, loading: true, error: null }));
-    try {
-      const [positions, allPositions, industry, overview, industryMappings] = await Promise.all([
-        api.positions(query),
-        api.positions({ page: 1, page_size: 100 }),
-        api.industryAllocation(),
-        api.overview(),
-        api.industryMappings(),
-      ]);
-      const loadedRows = asArray(positions.items);
-      const allLoadedRows = asArray(allPositions.items);
-      setState({ positions, allPositions, industry, overview, industryMappings, loading: false, error: null });
-      setSelected((prev) => {
-        if (allLoadedRows.length === 0) return null;
-        const previousSymbol = asText(prev?.symbol, "").toUpperCase();
-        const stillVisible = allLoadedRows.find((row) => asText(row.symbol, "").toUpperCase() === previousSymbol);
-        return stillVisible ?? allLoadedRows[0];
-      });
-    } catch (error) {
-      setState((prev) => ({ ...prev, loading: false, error: error instanceof Error ? error.message : "unknown error" }));
-    }
+  const { state, load } = useApiData<PositionData>(async () => {
+    const [positions, allPositions, industry, overview, industryMappings] = await Promise.all([
+      api.positions(query),
+      api.positions({ page: 1, page_size: 100 }),
+      api.industryAllocation(),
+      api.overview(),
+      api.industryMappings(),
+    ]);
+    return { positions, allPositions, industry, overview, industryMappings };
   }, [query]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    const allLoadedRows = asArray(state.data?.allPositions?.items);
+    setSelected((prev) => {
+      if (allLoadedRows.length === 0) return null;
+      const previousSymbol = asText(prev?.symbol, "").toUpperCase();
+      const stillVisible = allLoadedRows.find((row) => asText(row.symbol, "").toUpperCase() === previousSymbol);
+      return stillVisible ?? allLoadedRows[0];
+    });
+  }, [state.data?.allPositions]);
 
-  const currency = asText(state.positions?.display_currency, "USD");
+  const positionData = state.data;
+  const currency = asText(positionData?.positions?.display_currency, "USD");
   const rows = useMemo(
-    () => sortRecords(asArray(state.positions?.items), sortKey, sortDir),
-    [state.positions, sortKey, sortDir],
+    () => sortRecords(asArray(positionData?.positions?.items), sortKey, sortDir),
+    [positionData?.positions, sortKey, sortDir],
   );
-  const allRows = useMemo(() => asArray(state.allPositions?.items), [state.allPositions]);
-  const total = asNumber(state.positions?.total, rows.length);
-  const pageSize = query.page_size;
-  const overviewSourceValues = asRecord(state.overview?.source_values);
-  const cash = asNumber(overviewSourceValues.cash ?? state.overview?.cash, 0);
+  const allRows = useMemo(() => asArray(positionData?.allPositions?.items), [positionData?.allPositions]);
+  const total = asNumber(positionData?.positions?.total, rows.length);
+  const overviewSourceValues = asRecord(positionData?.overview?.source_values);
+  const cash = asNumber(overviewSourceValues.cash ?? positionData?.overview?.cash, 0);
   const holdingsValue = allRows.reduce((sum, row) => sum + asNumber(row.realtime_value ?? row.market_value_snapshot, 0), 0);
-  const equity = asNumber(overviewSourceValues.equity ?? state.overview?.equity, holdingsValue + cash);
-  const industryRows = asArray(state.industry?.items);
-  const mappingRows = asArray(state.industryMappings?.items);
+  const equity = asNumber(overviewSourceValues.equity ?? positionData?.overview?.equity, holdingsValue + cash);
+  const industryRows = asArray(positionData?.industry?.items);
+  const mappingRows = asArray(positionData?.industryMappings?.items);
   const rowSymbols = useMemo(
     () => Array.from(new Set(allRows.map((row) => asText(row.symbol, "").toUpperCase()).filter(Boolean))).sort(),
     [allRows],
@@ -280,15 +263,15 @@ export function PositionsPage() {
         title="当前持仓、行业与个股轨迹"
         meta={
           <>
-            <StatusPill tone={asText(state.positions?.valuation_mode) === "realtime" ? "positive" : "neutral"}>
-              {asText(state.positions?.valuation_mode, "snapshot")}
+            <StatusPill tone={asText(positionData?.positions?.valuation_mode) === "realtime" ? "positive" : "neutral"}>
+              {asText(positionData?.positions?.valuation_mode, "snapshot")}
             </StatusPill>
             <button type="button" onClick={load}>刷新</button>
           </>
         }
       />
 
-      {state.loading && !state.positions ? <LoadingBlock /> : null}
+      {state.loading && !positionData?.positions ? <LoadingBlock /> : null}
       {state.error ? <div className="inline-error">{state.error}</div> : null}
 
       <div className="content-grid">
@@ -331,21 +314,19 @@ export function PositionsPage() {
         action={
           <div className="cost-mode-control">
             <span>成本价：</span>
-            <div className="segmented-control segmented-control--compact">
-              {(["moving", "adjusted"] as CostMode[]).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  className={costMode === mode ? "active" : ""}
-                  onClick={() => {
-                    setCostMode(mode);
-                    setSortKey(mode === "moving" ? "cost_price_moving_weighted" : "cost_price_adjusted");
-                  }}
-                >
-                  {COST_MODE_LABEL[mode]}
-                </button>
-              ))}
-            </div>
+            <SegmentedControl
+              ariaLabel="成本价"
+              className="segmented-control--compact"
+              options={[
+                { value: "moving", label: COST_MODE_LABEL.moving },
+                { value: "adjusted", label: COST_MODE_LABEL.adjusted },
+              ]}
+              value={costMode}
+              onChange={(mode) => {
+                setCostMode(mode);
+                setSortKey(mode === "moving" ? "cost_price_moving_weighted" : "cost_price_adjusted");
+              }}
+            />
           </div>
         }
       >
@@ -406,16 +387,14 @@ export function PositionsPage() {
           ]}
           empty="暂无持仓记录"
         />
-        <div className="table-footer">
-          <Field label="每页">
-            <select value={query.page_size} onChange={(event) => setQuery({ ...query, page_size: Number(event.target.value), page: 1 })}>
-              <option value={20}>20</option>
-              <option value={50}>50</option>
-              <option value={100}>100</option>
-            </select>
-          </Field>
-          <Pager page={query.page} pageSize={pageSize} total={total} onPageChange={(page) => setQuery({ ...query, page })} />
-        </div>
+        <PaginationFooter
+          className="table-footer"
+          page={query.page}
+          pageSize={query.page_size}
+          total={total}
+          onPageChange={(page) => setQuery({ ...query, page })}
+          onPageSizeChange={(pageSize) => setQuery({ ...query, page_size: pageSize, page: 1 })}
+        />
       </Surface>
 
       {detailOpen && selected ? (

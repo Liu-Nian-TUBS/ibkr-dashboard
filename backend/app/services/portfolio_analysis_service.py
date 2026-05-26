@@ -30,11 +30,13 @@ from app.services.ai_narrative_service import build_ai_provider
 from app.services.industry_mapping_service import IndustryMappingService
 from app.services.market_data_provider import MarketDataPoint
 from app.services.market_data_provider import MarketDataProvider
-from app.services.market_data_provider import FutuOpenDReadOnlyProvider
+from app.services.market_data_provider import build_futu_opend_provider
 from app.services.market_data_provider import calculate_rsi
 from app.services.market_data_provider import fetch_cnn_fear_greed
 from app.services.quote_service import fetch_longbridge_valuation_rank
 from app.services.settings_service import SettingsService
+from app.utils.numbers import optional_float as _optional_float
+from app.utils.numbers import to_float as _to_float
 
 
 AI_SYMBOL_HINTS = {
@@ -57,6 +59,7 @@ SEMICONDUCTOR_HINTS = {"NVDA", "AMD", "TSM", "AVGO", "ASML", "SMCI", "MU", "INTC
 CYCLICAL_HINTS = {"TSLA", "RKLB", "BA", "CAT", "XOM", "CVX", "JPM", "BAC"}
 MARKET_BENCHMARKS = {"growth": "QQQ", "broad": "SPY"}
 MARKET_VOLUME_SYMBOLS = ("SPY", "QQQ", "DIA", "IWM")
+PORTFOLIO_AI_CACHE_INDEX = "portfolio_ai_analysis_cache_v1"
 
 
 class PortfolioAnalysisService:
@@ -339,7 +342,7 @@ class PortfolioAnalysisService:
         settings = self._settings_service.get()
         if settings.futu_connection_mode == "disabled":
             return {}
-        provider = FutuOpenDReadOnlyProvider(host=settings.futu_opend_host, port=settings.futu_opend_port)
+        provider = build_futu_opend_provider(settings)
         try:
             spy = provider.get_kline_history("SPY", days=30)
             qqq = provider.get_kline_history("QQQ", days=30)
@@ -582,6 +585,15 @@ class PortfolioAnalysisService:
                 provider=provider,
                 cache_key=cache_key,
             )
+            if overlay.get("reason") == "structured_ai_overlay_waiting_for_manual_refresh":
+                persisted = self._load_persisted_portfolio_ai_overlay(provider=provider, cache_key=cache_key)
+                if persisted is not None:
+                    self._ai_narrative_service.cache_portfolio_overlay(
+                        provider=provider,
+                        cache_key=cache_key,
+                        overlay=persisted,
+                    )
+                    overlay = persisted
             return _portfolio_overlay_with_local_fallback(provider=provider, metrics=metrics, overlay=overlay)
         overlay = self._ai_narrative_service.generate_portfolio_overlay(
             provider=provider,
@@ -589,22 +601,64 @@ class PortfolioAnalysisService:
             cache_key=cache_key,
             force=refresh_ai,
         )
+        self._persist_portfolio_ai_overlay(provider=provider, cache_key=cache_key, overlay=overlay)
         return _portfolio_overlay_with_local_fallback(provider=provider, metrics=metrics, overlay=overlay)
 
     def _refresh_portfolio_ai_overlay(self, provider: Any, metrics: dict[str, Any], cache_key: str) -> None:
         try:
-            self._ai_narrative_service.generate_portfolio_overlay(
+            overlay = self._ai_narrative_service.generate_portfolio_overlay(
                 provider=provider,
                 metrics=metrics,
                 cache_key=cache_key,
                 force=True,
             )
+            self._persist_portfolio_ai_overlay(provider=provider, cache_key=cache_key, overlay=overlay)
         except Exception as exc:
             self._ai_narrative_service.mark_portfolio_overlay_failed(
                 provider=provider,
                 cache_key=cache_key,
                 reason=f"structured_ai_overlay_background_failed: {exc}",
             )
+
+    def _load_persisted_portfolio_ai_overlay(self, *, provider: Any, cache_key: str) -> dict[str, Any] | None:
+        if self._raw_repository is None or not hasattr(self._raw_repository, "es"):
+            return None
+        try:
+            source = self._raw_repository.es.get(
+                index=PORTFOLIO_AI_CACHE_INDEX,
+                id=_portfolio_overlay_cache_doc_id(provider=provider, cache_key=cache_key),
+            )["_source"]
+        except Exception:
+            return None
+        overlay = source.get("overlay") if isinstance(source, dict) else None
+        if not isinstance(overlay, dict) or overlay.get("status") != AnalysisStatus.READY.value:
+            return None
+        return dict(overlay)
+
+    def _persist_portfolio_ai_overlay(self, *, provider: Any, cache_key: str, overlay: dict[str, Any]) -> None:
+        if (
+            self._raw_repository is None
+            or not hasattr(self._raw_repository, "es")
+            or not isinstance(overlay, dict)
+            or overlay.get("status") != AnalysisStatus.READY.value
+            or overlay.get("provider") != getattr(provider, "name", None)
+        ):
+            return
+        try:
+            self._raw_repository.es.update(
+                index=PORTFOLIO_AI_CACHE_INDEX,
+                id=_portfolio_overlay_cache_doc_id(provider=provider, cache_key=cache_key),
+                doc={
+                    "provider": getattr(provider, "name", ""),
+                    "cache_key": cache_key,
+                    "cache_date": date.today().isoformat(),
+                    "updated_at": _now_iso(),
+                    "overlay": dict(overlay),
+                },
+                doc_as_upsert=True,
+            )
+        except Exception:
+            return
 
     def _portfolio_risk_charts(self, positions: list[dict], total: float) -> list[EChartsPayload]:
         return [_weight_change_scatter_chart(positions, total)]
@@ -845,23 +899,6 @@ def _metric(
         status=status,
         reason=reason,
     )
-
-
-def _to_float(value: object) -> float:
-    try:
-        return float(value or 0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _optional_float(value: object) -> float | None:
-    if value in (None, ""):
-        return None
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed == parsed else None
 
 
 def _position_value(position: dict) -> float:
@@ -1596,6 +1633,10 @@ def _portfolio_overlay_cache_key(risk_rows: list[PortfolioRiskRow]) -> str:
         for row in risk_rows[:30]
     ]
     return f"v3:single_position_prompt:{'|'.join(chunks) or 'empty'}"
+
+
+def _portfolio_overlay_cache_doc_id(*, provider: Any, cache_key: str) -> str:
+    return f"{date.today().isoformat()}:{getattr(provider, 'name', 'ai_provider')}:{cache_key}"
 
 
 def _portfolio_overlay_with_local_fallback(

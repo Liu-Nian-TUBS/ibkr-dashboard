@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { MouseEvent, ReactNode } from "react";
 import { api } from "../../lib/api";
-import type { ApiRecord, OverviewResponse, PageKey, PageState } from "../../lib/contracts";
-import { asArray, asNumber, asRecord, asText, clamp, deltaClass, formatCurrency, formatDate, formatDateTimeMinute, formatNumber, formatPercent } from "../../lib/format";
-import { DataState, DataTable, MetricCard, Surface } from "../../components/Primitives";
-import { OverviewRiskWarning } from "./OverviewRiskWarning";
+import type { ApiRecord, OverviewResponse, PageKey } from "../../lib/contracts";
+import { useApiData } from "../../lib/useApiData";
+import { addDays, addMonths, asArray, asNumber, asRecord, asText, clamp, dateFromIso, dateToTime, daysBetween, deltaClass, formatCurrency, formatDate, formatDateTimeMinute, formatNumber, formatPercent, isoFromDate, normalizeIsoDate } from "../../lib/format";
+import { DataState, DataTable, MetricCard, SegmentedControl, Surface } from "../../components/Primitives";
+import { OverviewBetaStress, OverviewRiskDashboard } from "./OverviewRiskWarning";
 
 type ReturnMethod = "simple" | "twr" | "cash";
 type RangeKey = "1w" | "mtd" | "1m" | "3m" | "ytd" | "1y" | "all" | "custom";
@@ -63,64 +64,16 @@ const DEFAULT_BENCHMARKS: BenchmarkSeries[] = [
   { key: "qqq", label: "QQQ", symbol: "QQQ", status: "pending", source: "", points: [] },
 ];
 
-interface BenchmarkLoadState {
-  key: string | null;
-  rows: ApiRecord[] | null;
-  loading: boolean;
-  error: string | null;
-}
-
-let overviewPageCache: OverviewResponse | null = null;
-let overviewBenchmarkCache: { key: string; rows: ApiRecord[] } | null = null;
-
 export function OverviewPage({ onNavigate }: { onNavigate?: (page: PageKey) => void }) {
-  const [state, setState] = useState<PageState<OverviewResponse>>({
-    data: overviewPageCache,
-    loading: overviewPageCache === null,
-    error: null,
-  });
-  const [benchmarkState, setBenchmarkState] = useState<BenchmarkLoadState>({
-    key: overviewBenchmarkCache?.key ?? null,
-    rows: overviewBenchmarkCache?.rows ?? null,
-    loading: false,
-    error: null,
-  });
-
-  const load = useCallback(async () => {
-    setState((prev) => ({ ...prev, loading: true, error: null }));
-    try {
-      const data = await api.overview();
-      overviewPageCache = data;
-      setState({ data, loading: false, error: null });
-    } catch (error) {
-      setState((prev) => ({ ...prev, loading: false, error: error instanceof Error ? error.message : "unknown error" }));
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const { state, load } = useApiData<OverviewResponse>(() => api.overview());
+  const [benchmarkRows, setBenchmarkRows] = useState<ApiRecord[] | null>(null);
 
   const benchmarkRange = useMemo(() => resolveBenchmarkRange(state.data), [state.data]);
 
   useEffect(() => {
     if (!benchmarkRange) return;
-    if (overviewBenchmarkCache?.key === benchmarkRange.key) {
-      setBenchmarkState({
-        key: benchmarkRange.key,
-        rows: overviewBenchmarkCache.rows,
-        loading: false,
-        error: null,
-      });
-      return;
-    }
     let cancelled = false;
-    setBenchmarkState({
-      key: benchmarkRange.key,
-      rows: null,
-      loading: true,
-      error: null,
-    });
+    setBenchmarkRows(null);
     api.overviewBenchmarks({
       start_date: benchmarkRange.startDate,
       end_date: benchmarkRange.endDate,
@@ -130,22 +83,11 @@ export function OverviewPage({ onNavigate }: { onNavigate?: (page: PageKey) => v
         const rows = asArray(payload.benchmark_series).length > 0
           ? asArray(payload.benchmark_series)
           : asArray(payload.items);
-        overviewBenchmarkCache = { key: benchmarkRange.key, rows };
-        setBenchmarkState({
-          key: benchmarkRange.key,
-          rows,
-          loading: false,
-          error: null,
-        });
+        setBenchmarkRows(rows);
       })
-      .catch((error) => {
+      .catch(() => {
         if (cancelled) return;
-        setBenchmarkState({
-          key: benchmarkRange.key,
-          rows: null,
-          loading: false,
-          error: error instanceof Error ? error.message : "unknown error",
-        });
+        setBenchmarkRows(null);
       });
     return () => {
       cancelled = true;
@@ -157,7 +99,7 @@ export function OverviewPage({ onNavigate }: { onNavigate?: (page: PageKey) => v
       {(data) => (
         <OverviewContent
           data={data}
-          benchmarkRows={benchmarkState.rows}
+          benchmarkRows={benchmarkRows}
           onNavigate={onNavigate}
         />
       )}
@@ -334,7 +276,7 @@ function OverviewContent({
             title={`账户净值走势（${currency}）`}
             action={
               <div className="surface-action-group">
-                <SegmentedControl
+                <SegmentedField
                   label="指标"
                   options={[
                     { key: "simple" as const, label: "简单加权" },
@@ -344,7 +286,7 @@ function OverviewContent({
                   value={method}
                   onChange={setMethod}
                 />
-                <SegmentedControl
+                <SegmentedField
                   label="区间"
                   options={[
                     { key: "1w" as const, label: "1W" },
@@ -453,17 +395,17 @@ function OverviewContent({
               </Surface>
             </div>
 
-            <OverviewRiskWarning data={data} currency={currency} section="dashboard" />
+            <OverviewRiskDashboard data={data} />
           </section>
         </div>
 
-        <OverviewRiskWarning data={data} currency={currency} section="beta" />
+        <OverviewBetaStress currency={currency} />
       </section>
     </div>
   );
 }
 
-function SegmentedControl<T extends string>({
+function SegmentedField<T extends string>({
   label,
   options,
   value,
@@ -479,18 +421,11 @@ function SegmentedControl<T extends string>({
   return (
     <div className={`segmented-field ${wide ? "segmented-field--wide" : ""}`}>
       <span>{label}</span>
-      <div className="segmented-control">
-        {options.map((option) => (
-          <button
-            type="button"
-            key={option.key}
-            className={value === option.key ? "active" : ""}
-            onClick={() => onChange(option.key)}
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
+      <SegmentedControl
+        options={options.map((option) => ({ value: option.key, label: option.label }))}
+        value={value}
+        onChange={onChange}
+      />
     </div>
   );
 }
@@ -945,48 +880,4 @@ function calculateReturn(points: CurvePoint[], events: FlowEvent[], method: Retu
     amount,
     rate: Math.abs(denominator) < 1e-12 ? null : amount / denominator,
   };
-}
-
-function normalizeIsoDate(value: unknown): string {
-  const text = asText(value, "");
-  if (!text) return "";
-  if (/^\d{8}$/.test(text)) return `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`;
-  if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
-  return "";
-}
-
-function dateFromIso(value: string): Date | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
-  const [year, month, day] = value.split("-").map(Number);
-  return new Date(year, month - 1, day);
-}
-
-function dateToTime(value: string): number {
-  return dateFromIso(value)?.getTime() ?? 0;
-}
-
-function isoFromDate(value: Date): string {
-  const year = value.getFullYear();
-  const month = `${value.getMonth() + 1}`.padStart(2, "0");
-  const day = `${value.getDate()}`.padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function addDays(value: Date, days: number): Date {
-  const next = new Date(value);
-  next.setDate(next.getDate() + days);
-  return next;
-}
-
-function addMonths(value: Date, months: number): Date {
-  const next = new Date(value);
-  next.setMonth(next.getMonth() + months);
-  return next;
-}
-
-function daysBetween(start: string, end: string): number {
-  const startDate = dateFromIso(start);
-  const endDate = dateFromIso(end);
-  if (!startDate || !endDate) return 0;
-  return Math.round((endDate.getTime() - startDate.getTime()) / 86400000);
 }

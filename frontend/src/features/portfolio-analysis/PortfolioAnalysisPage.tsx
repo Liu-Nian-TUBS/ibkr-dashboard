@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { EChartsOption } from "echarts";
 import { api } from "../../lib/api";
 import type {
   ApiRecord,
@@ -11,9 +10,11 @@ import type {
   PortfolioAnalysisSectionKey,
   StandardMetric,
 } from "../../lib/contracts";
-import { asNumber, deltaClass, formatCurrency, formatNumber } from "../../lib/format";
+import { asNumber, deltaClass, formatCurrency, formatNumber, recordArray, recordBool, recordNumber, recordObject, recordText } from "../../lib/format";
+import { Icon } from "../../components/Icon";
 import { DataState, EmptyState, LoadingBlock, MetricCard, PageHeader, StatusPill, Surface } from "../../components/Primitives";
-import { EChart, baseGrid } from "../../components/charts/EChart";
+import { EChart } from "../../components/charts/EChart";
+import { buildPortfolioAnalysisChartOption } from "../../components/charts/chartOptions";
 
 const tabs: Array<{ key: PortfolioAnalysisSectionKey; label: string }> = [
   { key: "market", label: "市场分析" },
@@ -259,7 +260,7 @@ function MarketKpis({ market }: { market: PortfolioAnalysisResponse["sections"][
       {items.map((item) => (
         <div className={`market-kpi market-kpi--${item.tone}`} key={item.label}>
           <div>
-            <AnalysisIcon name={item.icon} />
+            <Icon className="analysis-icon" name={item.icon} />
             <span>{item.label}</span>
           </div>
           <strong>{item.value}</strong>
@@ -353,7 +354,7 @@ function PortfolioRiskKpis({ portfolio }: { portfolio: PortfolioAnalysisResponse
       {items.map((item) => (
         <div className={`portfolio-kpi-card portfolio-kpi-card--${item.tone}`} key={item.label}>
           <div>
-            <AnalysisIcon name={item.icon} />
+            <Icon className="analysis-icon" name={item.icon} />
             <span>{item.label}</span>
           </div>
           <strong>{item.value}</strong>
@@ -490,7 +491,7 @@ function RiskAlertSummary({ alerts }: { alerts: ApiRecord[] }) {
     <div className="risk-summary-list">
       {alerts.map((alert, index) => (
         <div className={`risk-summary risk-summary--${recordText(alert, "severity", "medium")}`} key={`${recordText(alert, "title", "alert")}-${index}`}>
-          <span><AnalysisIcon name={recordText(alert, "severity", "medium") === "high" ? "alert" : "radar"} />{severityLabel(recordText(alert, "severity", "medium"))}</span>
+          <span><Icon className="analysis-icon" name={recordText(alert, "severity", "medium") === "high" ? "alert" : "radar"} />{severityLabel(recordText(alert, "severity", "medium"))}</span>
           <strong>{recordText(alert, "title", "风险提示")}</strong>
           <p>{recordText(alert, "detail", "")}</p>
         </div>
@@ -593,7 +594,7 @@ function RebalanceAdvicePanel({ advice }: { advice: PortfolioAnalysisResponse["s
           <article className="rebalance-card" key={`${recordText(card, "title", "card")}-${index}`}>
             <div className="rebalance-card__top">
               <span>{normalizeAdviceRank(recordText(card, "rank", `0${index + 1}`), index)}</span>
-              <AnalysisIcon name={recordText(card, "icon", adviceIconForIndex(index))} />
+              <Icon className="analysis-icon" name={recordText(card, "icon", adviceIconForIndex(index))} />
             </div>
             <strong>{recordText(card, "title", adviceTitleForIndex(index))}</strong>
             <p>{recordText(card, "body", "-")}</p>
@@ -601,7 +602,7 @@ function RebalanceAdvicePanel({ advice }: { advice: PortfolioAnalysisResponse["s
         ))}
       </div>
       <div className="rebalance-command-strip">
-        <AnalysisIcon name="check" />
+        <Icon className="analysis-icon" name="check" />
         <strong>{advice.action_today || "先核实证据，不生成交易动作。"}</strong>
         {advice.thinking_prompt ? <span>{advice.thinking_prompt}</span> : null}
       </div>
@@ -623,25 +624,6 @@ function adviceIconForIndex(index: number): string {
 
 function adviceTitleForIndex(index: number): string {
   return ["研究方向", "低估线索", "拥挤风险", "近期催化"][index] ?? "建议";
-}
-
-function AnalysisIcon({ name }: { name: string }) {
-  const paths: Record<string, ReactNode> = {
-    alert: <><path d="M12 3 2.8 19h18.4L12 3Z" /><path d="M12 8v5" /><path d="M12 16h.01" /></>,
-    radar: <><circle cx="12" cy="12" r="8" /><path d="M12 4v8l5 3" /><path d="M4 12h16" /></>,
-    target: <><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3" /></>,
-    spark: <><path d="M12 2l1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8L12 2Z" /><path d="M18 16l.8 2.4L21 19l-2.2.6L18 22l-.8-2.4L15 19l2.2-.6L18 16Z" /></>,
-    database: <><ellipse cx="12" cy="5" rx="7" ry="3" /><path d="M5 5v6c0 1.7 3.1 3 7 3s7-1.3 7-3V5" /><path d="M5 11v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6" /></>,
-    compass: <><circle cx="12" cy="12" r="9" /><path d="m15.5 8.5-2.2 4.8-4.8 2.2 2.2-4.8 4.8-2.2Z" /></>,
-    search: <><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4 4" /></>,
-    calendar: <><rect x="4" y="5" width="16" height="15" rx="2" /><path d="M8 3v4M16 3v4M4 10h16" /></>,
-    check: <><circle cx="12" cy="12" r="9" /><path d="m8 12 2.5 2.5L16 9" /></>,
-  };
-  return (
-    <svg className="analysis-icon" viewBox="0 0 24 24" aria-hidden="true">
-      {paths[name] ?? paths.check}
-    </svg>
-  );
 }
 
 function AnalysisMeta({ meta }: { meta: ApiRecord }) {
@@ -689,7 +671,7 @@ function ChartGrid({ charts, currency }: { charts: EChartsPayload[]; currency: s
         <div className="analysis-chart-card" key={`${chart.title}-${index}`}>
           {chart.options.description ? <p>{String(chart.options.description)}</p> : null}
           {chart.status === "ready" && chart.series.length ? (
-            <EChart option={chartOption(chart, currency)} height={chart.chart_type === "gauge" ? 240 : 300} />
+            <EChart option={buildPortfolioAnalysisChartOption(chart, currency)} height={chart.chart_type === "gauge" ? 240 : 300} />
           ) : (
             <EmptyState compact title={chart.title} detail={`${statusLabel(chart.status)} · ${sourceLabel(chart.source)}`} />
           )}
@@ -697,162 +679,6 @@ function ChartGrid({ charts, currency }: { charts: EChartsPayload[]; currency: s
       ))}
     </div>
   );
-}
-
-function chartOption(chart: EChartsPayload, currency: string): EChartsOption {
-  const points = chart.series[0]?.points ?? [];
-  if (chart.chart_type === "gauge") {
-    return {
-      tooltip: { formatter: "{a}: {c}" },
-      series: [{
-        name: chart.title,
-        type: "gauge",
-        min: 0,
-        max: 100,
-        progress: { show: true, width: 10 },
-        axisLine: { lineStyle: { width: 10 } },
-        detail: { formatter: "{value}", fontSize: 24 },
-        data: [{ value: asNumber(points[0]?.value, 0), name: chart.title }],
-      }],
-    };
-  }
-  if (chart.chart_type === "bar") {
-    return {
-      grid: baseGrid(),
-      tooltip: { trigger: "axis" },
-      xAxis: { type: "category", data: points.map((point) => String(point.name ?? point.date ?? "")), axisLabel: { rotate: 20 } },
-      yAxis: { type: "value" },
-      series: [{ type: "bar", data: points.map((point) => asNumber(point.value, 0)), barMaxWidth: 42 }],
-    };
-  }
-  if (chart.chart_type === "waterfall") {
-    let running = 0;
-    const offsets: number[] = [];
-    const values = points.map((point) => asNumber(point.value, 0));
-    values.forEach((value) => {
-      offsets.push(value >= 0 ? running : running + value);
-      running += value;
-    });
-    return {
-      grid: baseGrid(),
-      tooltip: {
-        trigger: "axis",
-        valueFormatter: (value) => formatCurrency(value, currency),
-      },
-      xAxis: { type: "category", data: points.map((point) => String(point.name ?? "")), axisLabel: { rotate: 20 } },
-      yAxis: { type: "value", axisLabel: { formatter: (value: number) => formatCurrency(value, currency) } },
-      series: [
-        { type: "bar", stack: "total", data: offsets, itemStyle: { color: "transparent" }, emphasis: { disabled: true } },
-        {
-          name: chart.series[0]?.name ?? chart.title,
-          type: "bar",
-          stack: "total",
-          data: values,
-          barMaxWidth: 42,
-          itemStyle: { color: (params: { value: number }) => params.value >= 0 ? "#147a4a" : "#b13a32" },
-        },
-      ],
-    };
-  }
-  if (chart.chart_type === "scatter") {
-    return {
-      grid: baseGrid(),
-      tooltip: {
-        formatter: (params: unknown): string => {
-          const item = params as { data?: [number, number, number, string] };
-          const [x, y, value, name] = item.data ?? [0, 0, 0, ""];
-          return `${name}<br/>${String(chart.options.x_label ?? "X")}：${formatNumber(x)}%<br/>${String(chart.options.y_label ?? "Y")}：${formatNumber(y)}%<br/>市值：${formatCurrency(value, currency)}`;
-        },
-      },
-      xAxis: { type: "value", name: String(chart.options.x_label ?? ""), min: 0, scale: true },
-      yAxis: { type: "value", name: String(chart.options.y_label ?? ""), scale: true },
-      series: [{
-        name: chart.series[0]?.name ?? chart.title,
-        type: "scatter",
-        symbolSize: (value: number[]) => Math.max(14, Math.min(36, asNumber(value[0], 0) * 1.35)),
-        data: points.map((point) => [asNumber(point.x, 0), asNumber(point.y, 0), asNumber(point.value, 0), String(point.name ?? "")]),
-        itemStyle: { color: (params: { data?: unknown[] }) => asNumber(params.data?.[1], 0) >= 0 ? "#147a4a" : "#b13a32" },
-        label: { show: true, formatter: (params: { data?: unknown[] }) => String(params.data?.[3] ?? ""), position: "top" },
-      }],
-    };
-  }
-  if (chart.chart_type === "radar") {
-    return {
-      tooltip: {},
-      radar: {
-        indicator: points.map((point) => ({ name: String(point.name ?? ""), max: 100 })),
-        radius: "68%",
-      },
-      series: [{ type: "radar", data: [{ value: points.map((point) => asNumber(point.value, 0)), name: chart.title }] }],
-    };
-  }
-  if (chart.chart_type === "heatmap") {
-    const xLabels = Array.isArray(chart.options.x_labels) ? chart.options.x_labels.map(String) : [];
-    const yLabels = Array.isArray(chart.options.y_labels) ? chart.options.y_labels.map(String) : [];
-    return {
-      grid: baseGrid(),
-      tooltip: {
-        formatter: (params: unknown): string => {
-          const item = Array.isArray(params) ? params[0] : params;
-          const shaped = item as { value?: unknown; name?: string };
-          const value = Array.isArray(shaped.value) ? shaped.value[2] : "";
-          return `${shaped.name ?? chart.title}：${formatNumber(value)}%`;
-        },
-      },
-      xAxis: { type: "category", data: xLabels },
-      yAxis: { type: "category", data: yLabels },
-      visualMap: { min: asNumber(chart.options.min, 0), max: asNumber(chart.options.max, 100), calculable: false, orient: "horizontal", left: "center", bottom: 0 },
-      series: [{
-        type: "heatmap",
-        data: points.map((point) => [asNumber(point.x, 0), asNumber(point.y, 0), asNumber(point.value, 0)]),
-        label: { show: true, formatter: (params: { value?: unknown[] }) => `${formatNumber(Array.isArray(params.value) ? params.value[2] : 0, 0)}%`, fontSize: 10 },
-      }],
-    };
-  }
-  return {
-    grid: baseGrid(),
-    legend: chart.series.length > 1 ? { top: 0, right: 8, textStyle: { fontSize: 11 } } : undefined,
-    tooltip: {
-      trigger: "axis",
-      valueFormatter: (value) => chart.unit === currency ? formatCurrency(value, currency) : chart.unit === "percent" ? `${formatNumber(value)}%` : formatNumber(value),
-    },
-    xAxis: { type: "category", data: points.map((point) => String(point.date ?? point.name ?? "")) },
-    yAxis: { type: "value", scale: true },
-    series: chart.series.map((series) => ({
-      name: series.name,
-      type: "line",
-      smooth: true,
-      showSymbol: false,
-      data: series.points.map((point) => asNumber(point.value, 0)),
-    })),
-  };
-}
-
-function recordObject(record: ApiRecord, key: string): ApiRecord {
-  const value = record[key];
-  return value && typeof value === "object" && !Array.isArray(value) ? value as ApiRecord : {};
-}
-
-function recordArray(record: ApiRecord, key: string): ApiRecord[] {
-  const value = record[key];
-  return Array.isArray(value) ? value.filter((item): item is ApiRecord => Boolean(item) && typeof item === "object" && !Array.isArray(item)) : [];
-}
-
-function recordText(record: ApiRecord, key: string, fallback = ""): string {
-  const value = record[key];
-  if (value === undefined || value === null) return fallback;
-  return String(value);
-}
-
-function recordNumber(record: ApiRecord, key: string): number | null {
-  const value = record[key];
-  if (value === undefined || value === null || value === "") return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
-}
-
-function recordBool(record: ApiRecord, key: string): boolean {
-  return record[key] === true;
 }
 
 function severityLabel(severity: string): string {

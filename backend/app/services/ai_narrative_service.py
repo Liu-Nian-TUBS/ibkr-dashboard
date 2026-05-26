@@ -746,6 +746,19 @@ class AINarrativeService:
             self._structured_state[key] = dict(overlay)
         return overlay
 
+    def cache_portfolio_overlay(
+        self,
+        *,
+        provider: AIProvider,
+        cache_key: str = "default",
+        overlay: dict[str, Any],
+    ) -> None:
+        key = self._key(provider=provider, section="portfolio_overlay", cache_key=cache_key)
+        with self._lock:
+            if overlay.get("status") == AnalysisStatus.READY.value:
+                self._structured_cache[key] = dict(overlay)
+            self._structured_state[key] = dict(overlay)
+
     def generate_stock_memo(
         self,
         *,

@@ -10,8 +10,8 @@ from pydantic import BaseModel
 from app.api.response_models import STORAGE_UNAVAILABLE_OPENAPI_RESPONSE
 from app.services.flex_client import FlexStatementClient
 from app.repositories.raw_repository import RawRepository
-from app.services.market_data_provider import FutuOpenDReadOnlyProvider
 from app.services.market_data_provider import LongbridgeReadOnlyProvider
+from app.services.market_data_provider import build_futu_opend_provider
 from app.services.quote_service import QuoteService
 from app.services.quote_service import fetch_finnhub_quote
 from app.services.quote_service import refresh_longbridge_history_cache
@@ -300,7 +300,7 @@ def test_futu_connection(payload: FutuConnectionTestRequest) -> dict[str, object
     settings = settings_service.get()
     if settings.futu_connection_mode != "local_opend":
         return {"ok": False, "message": "futu_connection_mode_disabled"}
-    provider = FutuOpenDReadOnlyProvider(host=settings.futu_opend_host, port=settings.futu_opend_port)
+    provider = build_futu_opend_provider(settings)
     quote = provider.get_quote(payload.symbol or "AAPL")
     return {
         "ok": quote.get("status") == "ready",

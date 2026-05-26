@@ -6,6 +6,7 @@ import sys
 from contextlib import redirect_stdout
 from typing import Any
 
+from app.mcp_context import build_mcp_tools
 from app.services.mcp_tools import ReadOnlyMCPTools
 
 
@@ -13,14 +14,7 @@ _PROTOCOL_STDOUT = sys.stdout
 
 
 def _tool_context() -> ReadOnlyMCPTools:
-    from app.main import derived_repository, raw_repository, settings_service, _quote_service_instance
-
-    return ReadOnlyMCPTools(
-        raw_repository=raw_repository,
-        derived_repository=derived_repository,
-        settings_service=settings_service,
-        quote_service=_quote_service_instance,
-    )
+    return build_mcp_tools()
 
 
 def main() -> None:

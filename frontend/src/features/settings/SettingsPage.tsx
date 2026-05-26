@@ -5,11 +5,11 @@ import type {
   AiProvider,
   ApiRecord,
   ImportTaskResponse,
-  PageState,
   SettingsResponse,
   SettingsUpdatePayload,
 } from "../../lib/contracts";
 import { asArray, asNumber, asText, formatDateTimeMinute, formatInteger } from "../../lib/format";
+import { useApiData } from "../../lib/useApiData";
 import { DataState, DataTable, EmptyState, Field, MetricCard, PageHeader, StatusPill, Surface } from "../../components/Primitives";
 
 interface SettingsForm {
@@ -69,7 +69,7 @@ const defaultForm: SettingsForm = {
 const currencyOptions = [
   { value: "USD", label: "USD" },
   { value: "HKD", label: "HKD" },
-  { value: "RMB", label: "RMB" },
+  { value: "CNY", label: "CNY" },
 ];
 
 const timezoneOptions = [
@@ -124,13 +124,46 @@ function aiProviderStatusText(data: SettingsResponse): string {
   return data.openai_api_key ? "OpenAI 已配置" : "待配置 OpenAI";
 }
 
+function settingsToForm(data: SettingsResponse): SettingsForm {
+  return {
+    base_currency: asText(data.base_currency, "USD"),
+    timezone: asText(data.timezone, "America/New_York"),
+    finnhub_api_key: asText(data.finnhub_api_key, ""),
+    flex_token: asText(data.flex_token, ""),
+    flex_query_id: asText(data.flex_query_id, ""),
+    pull_frequency_minutes: asNumber(data.pull_frequency_minutes, 60),
+    display_realtime_prices: Boolean(data.display_realtime_prices),
+    ai_provider: data.ai_provider ?? "openai",
+    ai_model: asText(data.ai_model, ""),
+    openai_api_key: asText(data.openai_api_key, ""),
+    minimax_api_key: asText(data.minimax_api_key, ""),
+    minimax_base_url: asText(data.minimax_base_url, "https://api.minimaxi.com/v1"),
+    deepseek_api_key: asText(data.deepseek_api_key, ""),
+    deepseek_base_url: asText(data.deepseek_base_url, "https://api.deepseek.com"),
+    futu_connection_mode: data.futu_connection_mode ?? "disabled",
+    futu_opend_host: asText(data.futu_opend_host, "127.0.0.1"),
+    futu_opend_port: asNumber(data.futu_opend_port, 11111),
+    telegram_bot_token: asText(data.telegram_bot_token, ""),
+    telegram_allowlisted_chat_ids: data.telegram_allowlisted_chat_ids.join("\n"),
+    telegram_reports_enabled: Boolean(data.telegram_reports_enabled),
+    telegram_daily_report_time: asText(data.telegram_daily_report_time, "08:30"),
+    mcp_server_enabled: Boolean(data.mcp_server_enabled),
+    report_cache_enabled: Boolean(data.report_cache_enabled),
+    report_cache_ttl_minutes: asNumber(data.report_cache_ttl_minutes, 60),
+  };
+}
+
 export function SettingsPage() {
-  const [state, setState] = useState<PageState<SettingsResponse>>({ data: null, loading: true, error: null });
   const [form, setForm] = useState<SettingsForm>(defaultForm);
   const [aiModelCatalog, setAiModelCatalog] = useState<Partial<Record<AiProvider, AiModelProviderCatalog>>>({});
   const [showIntegrationGuide, setShowIntegrationGuide] = useState(false);
   const [message, setMessage] = useState("");
   const [importResult, setImportResult] = useState<ImportTaskResponse | null>(null);
+  const { state, load } = useApiData<SettingsResponse>(async () => {
+    const data = await api.settings();
+    setForm(settingsToForm(data));
+    return data;
+  });
 
   const loadAiModels = useCallback(async () => {
     try {
@@ -141,46 +174,6 @@ export function SettingsPage() {
       setAiModelCatalog({});
     }
   }, []);
-
-  const load = useCallback(async () => {
-    setState((prev) => ({ ...prev, loading: true, error: null }));
-    try {
-      const data = await api.settings();
-      setState({ data, loading: false, error: null });
-      setForm({
-        base_currency: asText(data.base_currency, "USD"),
-        timezone: asText(data.timezone, "America/New_York"),
-        finnhub_api_key: asText(data.finnhub_api_key, ""),
-        flex_token: asText(data.flex_token, ""),
-        flex_query_id: asText(data.flex_query_id, ""),
-        pull_frequency_minutes: asNumber(data.pull_frequency_minutes, 60),
-        display_realtime_prices: Boolean(data.display_realtime_prices),
-        ai_provider: data.ai_provider ?? "openai",
-        ai_model: asText(data.ai_model, ""),
-        openai_api_key: asText(data.openai_api_key, ""),
-        minimax_api_key: asText(data.minimax_api_key, ""),
-        minimax_base_url: asText(data.minimax_base_url, "https://api.minimaxi.com/v1"),
-        deepseek_api_key: asText(data.deepseek_api_key, ""),
-        deepseek_base_url: asText(data.deepseek_base_url, "https://api.deepseek.com"),
-        futu_connection_mode: data.futu_connection_mode ?? "disabled",
-        futu_opend_host: asText(data.futu_opend_host, "127.0.0.1"),
-        futu_opend_port: asNumber(data.futu_opend_port, 11111),
-        telegram_bot_token: asText(data.telegram_bot_token, ""),
-        telegram_allowlisted_chat_ids: data.telegram_allowlisted_chat_ids.join("\n"),
-        telegram_reports_enabled: Boolean(data.telegram_reports_enabled),
-        telegram_daily_report_time: asText(data.telegram_daily_report_time, "08:30"),
-        mcp_server_enabled: Boolean(data.mcp_server_enabled),
-        report_cache_enabled: Boolean(data.report_cache_enabled),
-        report_cache_ttl_minutes: asNumber(data.report_cache_ttl_minutes, 60),
-      });
-    } catch (error) {
-      setState((prev) => ({ ...prev, loading: false, error: error instanceof Error ? error.message : "unknown error" }));
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
 
   useEffect(() => {
     void loadAiModels();

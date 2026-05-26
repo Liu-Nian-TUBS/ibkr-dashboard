@@ -9,6 +9,9 @@ from app.services.ai_narrative_service import build_ai_provider
 from app.services.market_data_provider import MarketDataProvider
 from app.services.portfolio_analysis_service import PortfolioAnalysisService
 from app.services.settings_service import SettingsService
+from app.utils.numbers import first_number
+from app.utils.numbers import positive_float_or_none
+from app.utils.numbers import to_float as _to_float
 
 
 class TelegramHttpClient(Protocol):
@@ -370,13 +373,6 @@ class TelegramUpdatePollingService:
         return {"processed": True, "sent": sent}
 
 
-def _to_float(value: object) -> float:
-    try:
-        return float(value or 0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
 def _to_int(value: object) -> int | None:
     try:
         return int(value)
@@ -432,7 +428,7 @@ def _position_context_row(row: dict[str, Any], *, realized_pnl: float | None) ->
     mark_price = _first_float(row, ("mark_price_snapshot", "mark_price", "current_price", "price"))
     average_cost = _first_float(row, ("average_cost_price", "cost_basis_price", "avg_cost"))
     cost_basis = _first_float(row, ("cost_basis_money", "cost_basis", "cost"))
-    unrealized_pnl = _first_number(
+    unrealized_pnl_raw = first_number(
         row,
         (
             "unrealized_pnl",
@@ -441,6 +437,7 @@ def _position_context_row(row: dict[str, Any], *, realized_pnl: float | None) ->
             "unrealized_profit_loss",
         ),
     )
+    unrealized_pnl = round(unrealized_pnl_raw, 6) if unrealized_pnl_raw is not None else None
     return {
         "symbol": str(row.get("symbol") or "").upper(),
         "report_date": row.get("report_date") or row.get("report_date_iso"),
@@ -516,20 +513,9 @@ def _first_float(row: dict[str, Any], keys: tuple[str, ...]) -> float | None:
     for key in keys:
         if key not in row:
             continue
-        value = _to_float_or_none(row.get(key))
+        value = positive_float_or_none(row.get(key), digits=6)
         if value is not None:
             return value
-    return None
-
-
-def _first_number(row: dict[str, Any], keys: tuple[str, ...]) -> float | None:
-    for key in keys:
-        if key not in row:
-            continue
-        try:
-            return round(float(row.get(key) or 0), 6)
-        except (TypeError, ValueError):
-            continue
     return None
 
 
@@ -538,16 +524,6 @@ def _first_present_key(row: dict[str, Any], keys: tuple[str, ...]) -> str | None
         if row.get(key) is not None:
             return key
     return None
-
-
-def _to_float_or_none(value: object) -> float | None:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    if parsed <= 0:
-        return None
-    return round(parsed, 6)
 
 
 def _merge_history_points(*point_lists: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -561,7 +537,7 @@ def _dedupe_history_points(points: list[dict[str, Any]]) -> list[dict[str, Any]]
     by_date: dict[str, dict[str, Any]] = {}
     for point in points:
         date_key = str(point.get("date") or "")[:10]
-        close = _to_float_or_none(point.get("close"))
+        close = positive_float_or_none(point.get("close"), digits=6)
         if not date_key or close is None:
             continue
         by_date[date_key] = {
@@ -587,12 +563,12 @@ def _price_history_summary(points: list[dict[str, Any]]) -> dict[str, Any]:
         return {"points": 0}
     first = points[0]
     last = points[-1]
-    first_close = _to_float_or_none(first.get("close"))
-    last_close = _to_float_or_none(last.get("close"))
+    first_close = positive_float_or_none(first.get("close"), digits=6)
+    last_close = positive_float_or_none(last.get("close"), digits=6)
     change_pct = None
     if first_close is not None and last_close is not None and first_close:
         change_pct = round((last_close - first_close) / first_close * 100, 4)
-    closes = [_to_float_or_none(point.get("close")) for point in points]
+    closes = [positive_float_or_none(point.get("close"), digits=6) for point in points]
     valid_closes = [value for value in closes if value is not None]
     return {
         "points": len(points),

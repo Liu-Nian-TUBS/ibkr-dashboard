@@ -3,8 +3,6 @@ from datetime import date
 from datetime import timedelta
 from functools import lru_cache
 import importlib
-import json
-import subprocess
 from typing import Protocol
 
 import httpx
@@ -13,6 +11,14 @@ from app.services.quote_service import QuoteService
 from app.services.quote_service import fetch_benchmark_history
 from app.services.quote_service import fetch_longbridge_candles
 from app.services.quote_service import fetch_longbridge_quote
+from app.utils.longbridge import longbridge_records
+from app.utils.longbridge import run_longbridge_json
+from app.utils.numbers import optional_float as _float_or_none
+from app.utils.records import first_record as _first_record
+from app.utils.records import records as _records
+from app.utils.symbols import load_futu_module
+from app.utils.symbols import normalize_futu_symbol as _normalize_futu_symbol
+from app.utils.symbols import normalize_longbridge_symbol as _normalize_longbridge_symbol
 
 
 @dataclass(slots=True)
@@ -226,6 +232,29 @@ class LongbridgeReadOnlyProvider:
         return _fetch_longbridge_topic_sentiment(_normalize_longbridge_symbol(symbol))
 
 
+def build_market_data_provider(
+    settings: object,
+    quote_service: QuoteService | None = None,
+) -> MarketDataProvider:
+    mode = getattr(settings, "futu_connection_mode", "disabled")
+    if mode == "local_opend":
+        return build_futu_opend_provider(settings)
+    if mode == "longbridge":
+        return LongbridgeReadOnlyProvider()
+    return QuoteFallbackMarketDataProvider(quote_service)
+
+
+def build_futu_opend_provider(settings: object) -> FutuOpenDReadOnlyProvider:
+    return FutuOpenDReadOnlyProvider(
+        host=str(getattr(settings, "futu_opend_host", "127.0.0.1")),
+        port=int(getattr(settings, "futu_opend_port", 11111)),
+    )
+
+
+def _load_futu_module():
+    return load_futu_module(importlib.import_module)
+
+
 @lru_cache(maxsize=4)
 def fetch_cnn_fear_greed() -> dict:
     url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
@@ -263,57 +292,6 @@ def fetch_cnn_fear_greed() -> dict:
     }
 
 
-def _load_futu_module():
-    try:
-        return importlib.import_module("futu")
-    except ImportError:
-        return None
-
-
-def _normalize_futu_symbol(symbol: str) -> str:
-    cleaned = str(symbol or "").strip().upper()
-    if not cleaned:
-        return "US.AAPL"
-    if "." in cleaned:
-        return cleaned
-    if cleaned.isdigit():
-        if len(cleaned) == 5:
-            return f"HK.{cleaned}"
-        if cleaned.startswith(("6", "9")):
-            return f"SH.{cleaned}"
-        return f"SZ.{cleaned}"
-    return f"US.{cleaned}"
-
-
-def _normalize_longbridge_symbol(symbol: str) -> str:
-    cleaned = str(symbol or "").strip().upper()
-    if not cleaned:
-        return "AAPL.US"
-    index_aliases = {
-        "^GSPC": ".SPX.US",
-        "GSPC": ".SPX.US",
-        "^IXIC": ".IXIC.US",
-        "IXIC": ".IXIC.US",
-        "^NDX": ".NDX.US",
-        "NDX": ".NDX.US",
-        "^DJI": ".DJI.US",
-        "DJI": ".DJI.US",
-        "^VIX": ".VIX.US",
-        "VIX": ".VIX.US",
-    }
-    if cleaned in index_aliases:
-        return index_aliases[cleaned]
-    if "." in cleaned:
-        return cleaned
-    if cleaned.isdigit():
-        if len(cleaned) in {4, 5}:
-            return f"{int(cleaned)}.HK"
-        if cleaned.startswith(("6", "9")):
-            return f"{cleaned}.SH"
-        return f"{cleaned}.SZ"
-    return f"{cleaned}.US"
-
-
 def _unavailable_quote(symbol: str, source: str, reason: str) -> dict:
     return {
         "status": "unavailable",
@@ -326,7 +304,7 @@ def _unavailable_quote(symbol: str, source: str, reason: str) -> dict:
 
 @lru_cache(maxsize=8)
 def _fetch_longbridge_market_temperature(market: str) -> dict:
-    rows = _run_longbridge_json(["market-temp", market, "--format", "json"])
+    rows = longbridge_records(run_longbridge_json(["market-temp", market, "--format", "json"]))
     if not rows:
         return {
             "status": "missing_data",
@@ -359,7 +337,7 @@ def _fetch_longbridge_market_temperature(market: str) -> dict:
 
 @lru_cache(maxsize=128)
 def _fetch_longbridge_topic_sentiment(symbol: str) -> dict:
-    rows = _run_longbridge_json(["topic", "search", symbol, "--format", "json"])
+    rows = longbridge_records(run_longbridge_json(["topic", "search", symbol, "--format", "json"]))
     if not rows:
         return {
             "status": "missing_data",
@@ -392,26 +370,6 @@ def _fetch_longbridge_topic_sentiment(symbol: str) -> dict:
     }
 
 
-def _run_longbridge_json(args: list[str]) -> list[dict]:
-    try:
-        completed = subprocess.run(
-            ["longbridge", *args],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=8,
-        )
-    except Exception:
-        return []
-    if completed.returncode != 0:
-        return []
-    try:
-        payload = json.loads(completed.stdout or "[]")
-    except json.JSONDecodeError:
-        return []
-    return payload if isinstance(payload, list) else []
-
-
 def _cnn_score(payload: dict) -> float | None:
     candidates = [
         payload.get("fear_and_greed", {}).get("score") if isinstance(payload.get("fear_and_greed"), dict) else None,
@@ -442,30 +400,6 @@ def _cnn_rating(payload: dict) -> str:
 
 def _clean_label(value: object) -> str:
     return str(value or "").strip().lower().replace(" ", "_")
-
-
-def _records(data: object) -> list[dict]:
-    if hasattr(data, "to_dict"):
-        records = data.to_dict("records")
-        if isinstance(records, list):
-            return [record for record in records if isinstance(record, dict)]
-    if isinstance(data, list):
-        return [record for record in data if isinstance(record, dict)]
-    return []
-
-
-def _first_record(data: object) -> dict | None:
-    records = _records(data)
-    return records[0] if records else None
-
-
-def _float_or_none(value: object) -> float | None:
-    try:
-        if value is None or value == "":
-            return None
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def calculate_rsi(closes: list[float], period: int = 14) -> float | None:
