@@ -30,6 +30,8 @@ def list_trades(
     side: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    source: str | None = None,
+    account_id: str | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> dict:
@@ -95,6 +97,12 @@ def list_trades(
         if start_date_iso and trade_date_iso and trade_date_iso < start_date_iso:
             continue
         if end_date_iso and trade_date_iso and trade_date_iso > end_date_iso:
+            continue
+        if source == "manual" and item.get("source") != "manual":
+            continue
+        if source == "ibkr" and item.get("source") == "manual":
+            continue
+        if account_id and str(item.get("account_id", "")) != account_id:
             continue
         enriched = _enrich_trade_item(item)
         enriched["trade_date_iso"] = trade_date_iso
