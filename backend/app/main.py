@@ -62,6 +62,8 @@ from app.api.routes.telegram import set_settings_service as set_telegram_setting
 from app.api.routes.trades import router as trades_router
 from app.api.routes.trades import set_raw_repository as set_trades_raw_repository
 from app.api.routes.trades import set_settings_service as set_trades_settings_service
+from app.api.routes.manual_trades import router as manual_trades_router
+from app.api.routes.manual_trades import set_raw_repository as set_manual_trades_raw_repository
 from app.core.config import load_settings
 from app.core.config import validate_settings
 from app.core.errors import register_error_handlers
@@ -176,6 +178,7 @@ set_positions_raw_repository(raw_repository)
 set_portfolio_analysis_raw_repository(raw_repository)
 set_telegram_raw_repository(raw_repository)
 set_trades_raw_repository(raw_repository)
+set_manual_trades_raw_repository(raw_repository)
 set_cash_flows_raw_repository(raw_repository)
 set_performance_derived_repository(derived_repository)
 set_performance_raw_repository(raw_repository)
@@ -556,6 +559,7 @@ app.include_router(positions_router)
 app.include_router(portfolio_analysis_router)
 app.include_router(performance_router)
 app.include_router(trades_router)
+app.include_router(manual_trades_router)
 app.include_router(cash_flows_router)
 app.include_router(settings_router)
 app.include_router(telegram_router)

@@ -42,6 +42,11 @@ class HttpElasticsearchClient:
         if response.status_code >= 400:
             raise RuntimeError(f"failed to update {index}/{id}: {response.status_code}")
 
+    def delete(self, *, index: str, id: str) -> None:
+        response = self._client.delete(f"/{index}/_doc/{id}")
+        if response.status_code >= 400 and response.status_code != 404:
+            raise RuntimeError(f"failed to delete {index}/{id}: {response.status_code}")
+
     def get(self, *, index: str, id: str) -> dict[str, Any]:
         response = self._client.get(f"/{index}/_doc/{id}")
         if response.status_code == 404:

@@ -8,6 +8,10 @@ class InMemoryElasticsearchClient:
             raise ValueError("doc_as_upsert must be true")
         self.storage[(index, id)] = dict(doc)
 
+    def delete(self, *, index: str, id: str) -> None:
+        key = (index, id)
+        self.storage.pop(key, None)
+
     def get(self, *, index: str, id: str) -> dict:
         key = (index, id)
         if key not in self.storage:
