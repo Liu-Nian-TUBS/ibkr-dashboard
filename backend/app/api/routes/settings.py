@@ -24,7 +24,7 @@ quote_service: QuoteService | None = None
 daily_sync_runner: Callable[[str, str], dict[str, str]] | None = None
 pull_frequency_update_handler: Callable[[int], None] | None = None
 telegram_report_update_handler: Callable[[], None] | None = None
-SUPPORTED_AI_PROVIDERS = {"openai", "minimax", "deepseek", "mock"}
+SUPPORTED_AI_PROVIDERS = {"openai", "minimax", "deepseek", "custom", "mock"}
 MAX_AI_MODEL_LENGTH = 100
 SUPPORTED_FUTU_CONNECTION_MODES = {"disabled", "local_opend", "longbridge"}
 DEFAULT_HISTORY_REFRESH_SYMBOLS = ["SPY", "QQQ", "DIA", "IWM", "^GSPC", "^IXIC", "^NDX", "^VIX"]
@@ -40,6 +40,11 @@ AI_MODEL_OPTIONS = {
     "deepseek": [
         {"value": "deepseek-v4-flash", "label": "DeepSeek V4 Flash · 更快"},
         {"value": "deepseek-v4-pro", "label": "DeepSeek V4 Pro · 质量优先"},
+    ],
+    "custom": [
+        {"value": "gpt-4o", "label": "GPT-4o (默认)"},
+        {"value": "claude-sonnet-4-20250514", "label": "Claude Sonnet 4"},
+        {"value": "o3", "label": "o3"},
     ],
     "mock": [
         {"value": "mock", "label": "Mock · 本地模拟"},
@@ -64,6 +69,8 @@ class SettingsUpdateRequest(BaseModel):
     minimax_base_url: str | None = None
     deepseek_api_key: str | None = None
     deepseek_base_url: str | None = None
+    custom_api_key: str | None = None
+    custom_base_url: str | None = None
     futu_connection_mode: str | None = None
     futu_opend_host: str | None = None
     futu_opend_port: int | None = None
@@ -169,6 +176,8 @@ def update_settings(payload: SettingsUpdateRequest) -> dict[str, object]:
         raise HTTPException(status_code=400, detail="minimax_base_url must be an http(s) URL")
     if payload.deepseek_base_url is not None and not payload.deepseek_base_url.startswith(("https://", "http://")):
         raise HTTPException(status_code=400, detail="deepseek_base_url must be an http(s) URL")
+    if payload.custom_base_url is not None and not payload.custom_base_url.startswith(("https://", "http://")):
+        raise HTTPException(status_code=400, detail="custom_base_url must be an http(s) URL")
     if (
         payload.futu_connection_mode is not None
         and payload.futu_connection_mode not in SUPPORTED_FUTU_CONNECTION_MODES
@@ -203,6 +212,8 @@ def update_settings(payload: SettingsUpdateRequest) -> dict[str, object]:
         minimax_base_url=payload.minimax_base_url.rstrip("/") if payload.minimax_base_url else payload.minimax_base_url,
         deepseek_api_key=payload.deepseek_api_key,
         deepseek_base_url=payload.deepseek_base_url.rstrip("/") if payload.deepseek_base_url else payload.deepseek_base_url,
+        custom_api_key=payload.custom_api_key,
+        custom_base_url=payload.custom_base_url.rstrip("/") if payload.custom_base_url else payload.custom_base_url,
         futu_connection_mode=payload.futu_connection_mode,
         futu_opend_host=payload.futu_opend_host,
         futu_opend_port=payload.futu_opend_port,
@@ -461,6 +472,8 @@ def _settings_response() -> dict[str, object]:
         "minimax_base_url": settings.minimax_base_url,
         "deepseek_api_key": _mask_secret(settings.deepseek_api_key),
         "deepseek_base_url": settings.deepseek_base_url,
+        "custom_api_key": _mask_secret(settings.custom_api_key),
+        "custom_base_url": settings.custom_base_url,
         "futu_connection_mode": settings.futu_connection_mode,
         "futu_opend_host": settings.futu_opend_host,
         "futu_opend_port": settings.futu_opend_port,

@@ -405,7 +405,7 @@ export interface OverviewResponse extends ApiRecord {
   risk_dashboard?: OverviewRiskDashboard;
 }
 
-export type AiProvider = "openai" | "minimax" | "deepseek" | "mock";
+export type AiProvider = "openai" | "minimax" | "deepseek" | "custom" | "mock";
 
 export type FutuConnectionMode = "disabled" | "local_opend" | "longbridge";
 
@@ -439,6 +439,8 @@ export interface SettingsResponse {
   minimax_base_url: string;
   deepseek_api_key: string;
   deepseek_base_url: string;
+  custom_api_key: string;
+  custom_base_url: string;
   futu_connection_mode: FutuConnectionMode;
   futu_opend_host: string;
   futu_opend_port: number;

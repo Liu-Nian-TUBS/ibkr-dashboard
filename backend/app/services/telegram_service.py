@@ -173,6 +173,8 @@ class TelegramCommandService:
             minimax_base_url=settings.minimax_base_url,
             deepseek_api_key=settings.deepseek_api_key,
             deepseek_base_url=settings.deepseek_base_url,
+            custom_api_key=settings.custom_api_key,
+            custom_base_url=settings.custom_base_url,
         )
         metrics = self._telegram_question_context(question=question)
         narrative = provider.generate(section="telegram_question", metrics=metrics)

@@ -27,6 +27,8 @@ interface SettingsForm {
   minimax_base_url: string;
   deepseek_api_key: string;
   deepseek_base_url: string;
+  custom_api_key: string;
+  custom_base_url: string;
   futu_connection_mode: "disabled" | "local_opend" | "longbridge";
   futu_opend_host: string;
   futu_opend_port: number;
@@ -54,6 +56,8 @@ const defaultForm: SettingsForm = {
   minimax_base_url: "https://api.minimaxi.com/v1",
   deepseek_api_key: "",
   deepseek_base_url: "https://api.deepseek.com",
+  custom_api_key: "",
+  custom_base_url: "http://127.0.0.1:8080/v1",
   futu_connection_mode: "disabled",
   futu_opend_host: "127.0.0.1",
   futu_opend_port: 11111,
@@ -114,6 +118,7 @@ function aiProviderConfigured(data: SettingsResponse): boolean {
   if (data.ai_provider === "mock") return true;
   if (data.ai_provider === "minimax") return Boolean(data.minimax_api_key);
   if (data.ai_provider === "deepseek") return Boolean(data.deepseek_api_key);
+  if (data.ai_provider === "custom") return Boolean(data.custom_api_key);
   return Boolean(data.openai_api_key);
 }
 
@@ -121,6 +126,7 @@ function aiProviderStatusText(data: SettingsResponse): string {
   if (data.ai_provider === "mock") return "Mock AI";
   if (data.ai_provider === "minimax") return data.minimax_api_key ? "MiniMax 已配置" : "待配置 MiniMax";
   if (data.ai_provider === "deepseek") return data.deepseek_api_key ? "DeepSeek 已配置" : "待配置 DeepSeek";
+  if (data.ai_provider === "custom") return data.custom_api_key ? "自定义 AI 已配置" : "待配置自定义 AI";
   return data.openai_api_key ? "OpenAI 已配置" : "待配置 OpenAI";
 }
 
@@ -140,6 +146,8 @@ function settingsToForm(data: SettingsResponse): SettingsForm {
     minimax_base_url: asText(data.minimax_base_url, "https://api.minimaxi.com/v1"),
     deepseek_api_key: asText(data.deepseek_api_key, ""),
     deepseek_base_url: asText(data.deepseek_base_url, "https://api.deepseek.com"),
+    custom_api_key: asText(data.custom_api_key, ""),
+    custom_base_url: asText(data.custom_base_url, "http://127.0.0.1:8080/v1"),
     futu_connection_mode: data.futu_connection_mode ?? "disabled",
     futu_opend_host: asText(data.futu_opend_host, "127.0.0.1"),
     futu_opend_port: asNumber(data.futu_opend_port, 11111),
@@ -203,6 +211,8 @@ export function SettingsPage() {
         minimax_base_url: form.minimax_base_url,
         deepseek_api_key: form.deepseek_api_key,
         deepseek_base_url: form.deepseek_base_url,
+        custom_api_key: form.custom_api_key,
+        custom_base_url: form.custom_base_url,
         futu_connection_mode: form.futu_connection_mode,
         futu_opend_host: form.futu_opend_host,
         futu_opend_port: form.futu_opend_port,
@@ -219,6 +229,7 @@ export function SettingsPage() {
       if (hasMaskedValue(form.openai_api_key)) delete payload.openai_api_key;
       if (hasMaskedValue(form.minimax_api_key)) delete payload.minimax_api_key;
       if (hasMaskedValue(form.deepseek_api_key)) delete payload.deepseek_api_key;
+      if (hasMaskedValue(form.custom_api_key)) delete payload.custom_api_key;
       if (hasMaskedValue(form.telegram_bot_token)) delete payload.telegram_bot_token;
       await api.saveSettings(payload);
       setMessage("设置已保存");
@@ -402,16 +413,21 @@ export function SettingsPage() {
                       <option value="openai">OpenAI</option>
                       <option value="minimax">MiniMax</option>
                       <option value="deepseek">DeepSeek</option>
+                      <option value="custom">自定义 (OpenAI 兼容)</option>
                       <option value="mock">Mock</option>
                     </select>
                   </Field>
                   <Field label="AI 模型">
-                    <select value={form.ai_model} onChange={(event) => setForm({ ...form, ai_model: event.target.value })}>
-                      {currentAiModelOptions.length === 0 ? <option value="">加载模型列表</option> : null}
-                      {currentAiModelOptions.map((option) => (
-                        <option key={option.value} value={option.value}>{option.label}</option>
-                      ))}
-                    </select>
+                    {form.ai_provider === "custom" ? (
+                      <input value={form.ai_model} onChange={(event) => setForm({ ...form, ai_model: event.target.value })} placeholder="输入模型名称，如 gpt-4o" />
+                    ) : (
+                      <select value={form.ai_model} onChange={(event) => setForm({ ...form, ai_model: event.target.value })}>
+                        {currentAiModelOptions.length === 0 ? <option value="">加载模型列表</option> : null}
+                        {currentAiModelOptions.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    )}
                   </Field>
                   {form.ai_provider === "openai" ? (
                     <Field label="OpenAI API Key">
@@ -435,6 +451,16 @@ export function SettingsPage() {
                       </Field>
                       <Field label="DeepSeek Base URL">
                         <input value={form.deepseek_base_url} onChange={(event) => setForm({ ...form, deepseek_base_url: event.target.value })} />
+                      </Field>
+                    </>
+                  ) : null}
+                  {form.ai_provider === "custom" ? (
+                    <>
+                      <Field label="API Key">
+                        <input value={form.custom_api_key} onChange={(event) => setForm({ ...form, custom_api_key: event.target.value })} />
+                      </Field>
+                      <Field label="Base URL">
+                        <input value={form.custom_base_url} onChange={(event) => setForm({ ...form, custom_base_url: event.target.value })} placeholder="http://127.0.0.1:8080/v1" />
                       </Field>
                     </>
                   ) : null}

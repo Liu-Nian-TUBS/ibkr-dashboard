@@ -25,6 +25,8 @@ class AppSettings:
     minimax_base_url: str = "https://api.minimaxi.com/v1"
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
+    custom_api_key: str = ""
+    custom_base_url: str = "http://127.0.0.1:8080/v1"
     futu_connection_mode: str = "disabled"
     futu_opend_host: str = "127.0.0.1"
     futu_opend_port: int = 11111
@@ -77,6 +79,8 @@ class SettingsService:
         minimax_base_url: str | None = None,
         deepseek_api_key: str | None = None,
         deepseek_base_url: str | None = None,
+        custom_api_key: str | None = None,
+        custom_base_url: str | None = None,
         futu_connection_mode: str | None = None,
         futu_opend_host: str | None = None,
         futu_opend_port: int | None = None,
@@ -118,6 +122,10 @@ class SettingsService:
             self._settings.deepseek_api_key = deepseek_api_key
         if deepseek_base_url is not None:
             self._settings.deepseek_base_url = deepseek_base_url
+        if custom_api_key is not None:
+            self._settings.custom_api_key = custom_api_key
+        if custom_base_url is not None:
+            self._settings.custom_base_url = custom_base_url
         if futu_connection_mode is not None:
             self._settings.futu_connection_mode = futu_connection_mode
         if futu_opend_host is not None:
@@ -170,6 +178,8 @@ class SettingsService:
             "minimax_base_url": self._settings.minimax_base_url,
             "deepseek_api_key": self._settings.deepseek_api_key,
             "deepseek_base_url": self._settings.deepseek_base_url,
+            "custom_api_key": self._settings.custom_api_key,
+            "custom_base_url": self._settings.custom_base_url,
             "futu_connection_mode": self._settings.futu_connection_mode,
             "futu_opend_host": self._settings.futu_opend_host,
             "futu_opend_port": self._settings.futu_opend_port,
@@ -206,6 +216,7 @@ SECRET_FIELDS = {
     "openai_api_key",
     "minimax_api_key",
     "deepseek_api_key",
+    "custom_api_key",
     "telegram_bot_token",
 }
 ENCRYPTED_SECRET_PREFIX = "enc:v1:"

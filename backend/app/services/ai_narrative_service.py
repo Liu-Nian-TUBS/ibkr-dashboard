@@ -666,6 +666,51 @@ class DeepSeekChatCompletionsProvider(MiniMaxChatCompletionsProvider):
         return None
 
 
+class CustomOpenAICompatibleProvider(MiniMaxChatCompletionsProvider):
+    """Generic OpenAI-compatible provider (e.g. copilot2api, one-api, new-api)."""
+
+    name = "custom"
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str = "gpt-4o",
+        base_url: str = "http://127.0.0.1:8080/v1",
+        timeout_seconds: float = 120.0,
+    ) -> None:
+        super().__init__(
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def _model_candidates(self) -> list[str]:
+        normalized = str(self.model or "").strip() or "gpt-4o"
+        return [normalized]
+
+    def _request_payload(
+        self,
+        *,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        response_format: bool,
+        max_tokens: int,
+    ) -> dict[str, Any]:
+        return _openai_compatible_chat_request_payload(
+            model=model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_format=response_format,
+            max_tokens=max_tokens,
+        )
+
+    def _raise_response_error(self, payload: dict[str, Any]) -> None:
+        return None
+
+
 class AINarrativeService:
     _shared_daily_cache: dict[tuple[str, str, str], AINarrativePayload] = {}
     _shared_refresh_state: dict[tuple[str, str, str], AINarrativePayload] = {}
@@ -1422,6 +1467,8 @@ def build_ai_provider(
     minimax_base_url: str = "https://api.minimaxi.com/v1",
     deepseek_api_key: str = "",
     deepseek_base_url: str = "https://api.deepseek.com",
+    custom_api_key: str = "",
+    custom_base_url: str = "http://127.0.0.1:8080/v1",
 ) -> AIProvider:
     normalized = (provider_name or "openai").lower()
     if normalized == "mock":
@@ -1437,6 +1484,12 @@ def build_ai_provider(
             api_key=deepseek_api_key,
             model=ai_model or "deepseek-v4-flash",
             base_url=deepseek_base_url or "https://api.deepseek.com",
+        )
+    if normalized == "custom":
+        return CustomOpenAICompatibleProvider(
+            api_key=custom_api_key or openai_api_key,
+            model=ai_model or "gpt-4o",
+            base_url=custom_base_url or "http://127.0.0.1:8080/v1",
         )
     return OpenAIResponsesProvider(api_key=openai_api_key, model=ai_model or "gpt-5-mini")
 

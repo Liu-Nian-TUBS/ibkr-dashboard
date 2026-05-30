@@ -868,6 +868,8 @@ class PortfolioAnalysisService:
             minimax_base_url=settings.minimax_base_url,
             deepseek_api_key=settings.deepseek_api_key,
             deepseek_base_url=settings.deepseek_base_url,
+            custom_api_key=settings.custom_api_key,
+            custom_base_url=settings.custom_base_url,
         )
 
     def _resolve_stock_symbol(self, symbol: str | None) -> str | None:
