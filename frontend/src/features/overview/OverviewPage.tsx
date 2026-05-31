@@ -175,11 +175,13 @@ function OverviewContent({
     if (pts.length < 2) return null;
     const first = pts[0];
     const last = pts[pts.length - 1];
-    if (first.totalPnl != null && last.totalPnl != null) {
-      return last.totalPnl - first.totalPnl;
-    }
+    if (last.totalPnl == null) return null;
+    // For all-time range, use last point's totalPnl directly (includes first-day gain)
+    if (range === "all") return last.totalPnl;
+    // For sub-ranges, diff gives precise interval gain
+    if (first.totalPnl != null) return last.totalPnl - first.totalPnl;
     return null;
-  }, [selectedRange.points]);
+  }, [selectedRange.points, range]);
   const portfolioReturnSeries = useMemo(
     () => buildPortfolioReturnSeries(selectedRange.points, selectedFlows, method),
     [method, selectedFlows, selectedRange.points],
