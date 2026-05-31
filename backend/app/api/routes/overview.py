@@ -1686,6 +1686,16 @@ def get_overview() -> dict:
                     _combined_cashflow[_td] = _combined_cashflow.get(_td, 0) - _amt
         # Filter equity_curve to non-zero equity for return calculations
         _filtered_curve = [row for row in equity_curve if abs(float(row.get("equity", 0) or 0)) >= 0.01]
+        # Attach cumulative total_pnl to each curve point: total_pnl(date) = equity(date) - cum_net_inflow(date)
+        _cum_inflow = 0.0
+        _sorted_flow_dates = sorted(_combined_cashflow.keys())
+        _flow_idx = 0
+        for _row in sorted(_filtered_curve, key=lambda r: str(r.get("report_date", ""))):
+            _rd = str(_row.get("report_date", ""))
+            while _flow_idx < len(_sorted_flow_dates) and _sorted_flow_dates[_flow_idx] <= _rd:
+                _cum_inflow += _combined_cashflow[_sorted_flow_dates[_flow_idx]]
+                _flow_idx += 1
+            _row["total_pnl"] = round(float(_row.get("equity", 0)) - _cum_inflow, 2)
         twr_ytd = _compute_twr_from_snapshot_rows(
             all_snapshots_sorted,
             _combined_cashflow,

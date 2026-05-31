@@ -16,6 +16,7 @@ interface CurvePoint {
   equity: number;
   cash: number;
   marketValue: number;
+  totalPnl: number | null;
 }
 
 interface FlowEvent {
@@ -169,6 +170,16 @@ function OverviewContent({
     () => calculateReturn(selectedRange.points, selectedFlows, method),
     [method, selectedFlows, selectedRange.points],
   );
+  const precisePnl = useMemo(() => {
+    const pts = selectedRange.points;
+    if (pts.length < 2) return null;
+    const first = pts[0];
+    const last = pts[pts.length - 1];
+    if (first.totalPnl != null && last.totalPnl != null) {
+      return last.totalPnl - first.totalPnl;
+    }
+    return null;
+  }, [selectedRange.points]);
   const portfolioReturnSeries = useMemo(
     () => buildPortfolioReturnSeries(selectedRange.points, selectedFlows, method),
     [method, selectedFlows, selectedRange.points],
@@ -340,8 +351,8 @@ function OverviewContent({
                 <div className="chart-kpi-pair">
                   <ChartKpi
                     label="累计收益"
-                    value={formatCurrency(range === "all" ? data.total_pnl : returnSummary.amount, currency)}
-                    tone={deltaClass((range === "all" ? data.total_pnl : returnSummary.amount) ?? 0)}
+                    value={formatCurrency(precisePnl ?? returnSummary.amount, currency)}
+                    tone={deltaClass((precisePnl ?? returnSummary.amount) ?? 0)}
                   />
                   <ChartKpi
                     label="收益率"
@@ -657,6 +668,7 @@ function normalizeCurveRows(rows: ApiRecord[]): CurvePoint[] {
       equity: asNumber(row.equity ?? row.total_equity, 0),
       cash: asNumber(row.cash, 0),
       marketValue: asNumber(row.market_value ?? row.stock_market_value, 0),
+      totalPnl: row.total_pnl != null ? asNumber(row.total_pnl, 0) : null,
     });
   }
   points.sort((left, right) => left.date.localeCompare(right.date));
