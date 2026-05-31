@@ -100,9 +100,9 @@ def create_manual_trade(payload: ManualTradeRequest) -> dict:
             doc["fifo_pnl_realized"] = round((doc["trade_price"] - avg_cost) * doc["quantity"], 2)
     _raw_repository.es.update(index="ibkr_trade_records_v1", id=trade_id, doc=doc, doc_as_upsert=True)
     _sync_manual_position_snapshot(doc["symbol"], doc["account_id"])
-    # Trigger history backfill if needed
+    # Trigger history backfill (force recalculate since new trade changes historical qty)
     try:
-        _backfill_manual_history(doc["symbol"], doc["account_id"])
+        _backfill_manual_history(doc["symbol"], doc["account_id"], force=True)
     except Exception:
         pass
     return {"status": "created", "trade_id": trade_id, "record": doc}
@@ -191,6 +191,10 @@ def delete_manual_trade(trade_id: str) -> dict:
     _raw_repository.es.delete(index="ibkr_trade_records_v1", id=trade_id)
     if symbol:
         _sync_manual_position_snapshot(symbol, account_id)
+        try:
+            _backfill_manual_history(symbol, account_id, force=True)
+        except Exception:
+            pass
     return {"status": "deleted", "trade_id": trade_id}
 
 
@@ -260,8 +264,11 @@ def _sync_manual_position_snapshot(symbol: str, account_id: str = "manual") -> N
     _raw_repository.es.update(index="ibkr_position_snapshots_v1", id=snapshot_id, doc=doc, doc_as_upsert=True)
 
 
-def _backfill_manual_history(symbol: str, account_id: str = "manual") -> dict:
-    """Backfill historical daily snapshots for a manual position using Sina K-line data."""
+def _backfill_manual_history(symbol: str, account_id: str = "manual", *, force: bool = False) -> dict:
+    """Backfill historical daily snapshots for a manual position using Sina K-line data.
+    
+    When force=True, existing snapshots are recalculated (use after adding new trades).
+    """
     if _raw_repository is None or not symbol:
         return {"status": "skipped", "reason": "no repository or symbol"}
 
@@ -299,14 +306,15 @@ def _backfill_manual_history(symbol: str, account_id: str = "manual") -> dict:
         date_tag = hist_date_str.replace("-", "")
         snap_id = f"manual_{account_id}_{symbol}_{date_tag}_SUMMARY"
 
-        # Check if exists
-        try:
-            existing = _raw_repository.es.get(index="ibkr_position_snapshots_v1", id=snap_id)
-            if existing:
-                skipped += 1
-                continue
-        except Exception:
-            pass
+        # Check if exists (skip unless force mode)
+        if not force:
+            try:
+                existing = _raw_repository.es.get(index="ibkr_position_snapshots_v1", id=snap_id)
+                if existing:
+                    skipped += 1
+                    continue
+            except Exception:
+                pass
 
         # Calculate position as of this date
         net_quantity = 0.0
