@@ -560,24 +560,28 @@ def _build_pnl_leaderboard(
 
 
 def _refresh_manual_snapshots_today() -> None:
-    """Create today's snapshot for each manual-source position so the PnL calendar has daily data."""
+    """Create today's snapshot for each manual-source position that is still held."""
     from datetime import date as _date
-    # Skip weekends — no market data
-    if _date.today().weekday() >= 5:  # 5=Saturday, 6=Sunday
+    if _date.today().weekday() >= 5:
         return
     try:
         from app.api.routes.manual_trades import _sync_manual_position_snapshot
-        manual_snapshots = _raw_repository.es.search(
-            index="ibkr_position_snapshots_v1",
+        # Get all manual trades to compute net qty
+        manual_trades = _raw_repository.es.search(
+            index="ibkr_trade_records_v1",
             size=10000,
             term_filters={"source": "manual"},
         )
-        seen_symbols: set[str] = set()
-        for snap in manual_snapshots:
-            sym = str(snap.get("symbol", "")).upper()
-            acct = str(snap.get("account_id", "manual"))
-            if sym and sym not in seen_symbols:
-                seen_symbols.add(sym)
+        net_qty: dict[tuple[str, str], float] = {}
+        for t in sorted(manual_trades, key=lambda x: x.get("trade_date", "")):
+            key = (str(t.get("symbol", "")).upper(), str(t.get("account_id", "")))
+            side = str(t.get("side", t.get("buy_sell", ""))).upper()
+            qty = float(t.get("quantity", 0) or 0)
+            cur = net_qty.get(key, 0.0)
+            net_qty[key] = cur + qty if side == "BUY" else cur - qty
+        # Only refresh positions still held
+        for (sym, acct), q in net_qty.items():
+            if q > 0:
                 _sync_manual_position_snapshot(sym, acct)
     except Exception:
         pass
