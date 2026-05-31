@@ -1774,7 +1774,7 @@ def get_overview() -> dict:
         timezone_name=timezone_name,
     )
     risk_dashboard = _build_risk_dashboard(
-        equity=equity,
+        equity=total_equity_with_manual,
         cash=cash,
         market_value=market_value,
         positions=risk_positions or latest_positions,
