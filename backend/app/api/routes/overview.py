@@ -577,26 +577,45 @@ def _compute_ytd_simple_weighted_return(
     cashflow_by_date: dict[str, float],
     *,
     report_date: str,
+    equity_curve: list[dict] | None = None,
 ) -> float | None:
-    if not snapshots or not report_date:
+    if not report_date:
         return None
     current_year = str(report_date)[:4]
     year_start = f"{current_year}0101"
-    ordered = sorted(
-        [row for row in snapshots if str(row.get("report_date", "") or "") <= str(report_date)],
-        key=lambda row: str(row.get("report_date", "") or ""),
-    )
-    if not ordered:
-        return None
-    begin_row = next(
-        (row for row in ordered if str(row.get("report_date", "") or "") >= year_start),
-        None,
-    )
-    end_row = ordered[-1]
-    if begin_row is None:
-        return None
-    begin_equity = _to_float(begin_row.get("total_equity"))
-    current_equity = _to_float(end_row.get("total_equity"))
+    # Use equity_curve if provided (includes manual MV)
+    if equity_curve and len(equity_curve) >= 2:
+        ordered = sorted(
+            [row for row in equity_curve if str(row.get("report_date", "") or "") <= str(report_date)],
+            key=lambda row: str(row.get("report_date", "") or ""),
+        )
+        if not ordered:
+            return None
+        begin_row = next(
+            (row for row in ordered if str(row.get("report_date", "") or "") >= year_start),
+            None,
+        )
+        if begin_row is None:
+            return None
+        begin_equity = _to_float(begin_row.get("equity"))
+        current_equity = _to_float(ordered[-1].get("equity"))
+    else:
+        if not snapshots:
+            return None
+        ordered = sorted(
+            [row for row in snapshots if str(row.get("report_date", "") or "") <= str(report_date)],
+            key=lambda row: str(row.get("report_date", "") or ""),
+        )
+        if not ordered:
+            return None
+        begin_row = next(
+            (row for row in ordered if str(row.get("report_date", "") or "") >= year_start),
+            None,
+        )
+        if begin_row is None:
+            return None
+        begin_equity = _to_float(begin_row.get("total_equity"))
+        current_equity = _to_float(ordered[-1].get("total_equity"))
     net_inflow = sum(
         _to_float(amount)
         for day, amount in cashflow_by_date.items()
@@ -1663,10 +1682,33 @@ def get_overview() -> dict:
             mwrr_ytd = twr_ytd
         if mwrr_all_time is not None and (mwrr_all_time < -1.0 or mwrr_all_time > 10.0):
             mwrr_all_time = twr_all_time
+        # Merge manual trade flows into cashflow for consistent calculation
+        _combined_cashflow = dict(cashflow_by_date)
+        if _raw_repository is not None:
+            _manual_flow_trades = _raw_repository.es.search(
+                index="ibkr_trade_records_v1",
+                size=10000,
+                term_filters={"source": "manual"},
+            )
+            for _mft in _manual_flow_trades:
+                _side = str(_mft.get("side", _mft.get("buy_sell", ""))).upper()
+                _qty = float(_mft.get("quantity", 0) or 0)
+                _price = float(_mft.get("trade_price", 0) or 0)
+                _comm = abs(float(_mft.get("ib_commission", 0) or 0))
+                _td = str(_mft.get("trade_date", "") or "").replace("-", "")
+                if not _td:
+                    continue
+                if _side == "BUY":
+                    _amt = _qty * _price + _comm
+                    _combined_cashflow[_td] = _combined_cashflow.get(_td, 0) + _amt
+                elif _side == "SELL":
+                    _amt = _qty * _price - _comm
+                    _combined_cashflow[_td] = _combined_cashflow.get(_td, 0) - _amt
         ytd_simple_weighted = _compute_ytd_simple_weighted_return(
             all_snapshots_sorted,
-            cashflow_by_date,
+            _combined_cashflow,
             report_date=str(report_date),
+            equity_curve=equity_curve,
         )
 
     ytd_dividends, ytd_interest, ytd_commissions = _compute_ytd_cashflow_metrics(
