@@ -762,16 +762,39 @@ class PortfolioAnalysisService:
             term_filters=filters,
         )
         all_rows = self._raw_repository.es.search(index="ibkr_position_snapshots_v1", size=10000)
-        # Include manual-source positions
+        # Merge manual-source positions into IBKR positions (by symbol)
         manual_rows = self._raw_repository.es.search(
             index="ibkr_position_snapshots_v1",
             size=10000,
             term_filters={"source": "manual"},
         )
-        existing_symbols = {str(r.get("symbol", "")).upper() for r in rows}
+        # Get latest snapshot per (symbol, account_id) from manual
+        _manual_latest: dict[tuple[str, str], dict] = {}
         for mr in manual_rows:
             sym = str(mr.get("symbol", "")).upper()
-            if sym and sym not in existing_symbols:
+            acct = str(mr.get("account_id", ""))
+            rd = str(mr.get("report_date", ""))
+            key = (sym, acct)
+            if key not in _manual_latest or rd > str(_manual_latest[key].get("report_date", "")):
+                _manual_latest[key] = mr
+        existing_symbols = {str(r.get("symbol", "")).upper() for r in rows}
+        for (sym, _acct), mr in _manual_latest.items():
+            qty = float(mr.get("quantity", 0) or 0)
+            if qty <= 0:
+                continue
+            if sym in existing_symbols:
+                # Merge into existing position
+                for r in rows:
+                    if str(r.get("symbol", "")).upper() == sym:
+                        r["quantity"] = float(r.get("quantity", 0) or 0) + qty
+                        r["cost_basis_money"] = float(r.get("cost_basis_money", 0) or 0) + float(mr.get("cost_basis_money", 0) or 0)
+                        r["market_value_snapshot"] = float(r.get("market_value_snapshot", 0) or 0) + float(mr.get("market_value_snapshot", 0) or 0)
+                        r["unrealized_pnl_snapshot"] = float(r.get("unrealized_pnl_snapshot", 0) or 0) + float(mr.get("unrealized_pnl_snapshot", 0) or 0)
+                        total_qty = float(r.get("quantity", 0) or 0)
+                        if total_qty > 0:
+                            r["average_cost_price"] = float(r.get("cost_basis_money", 0) or 0) / total_qty
+                        break
+            else:
                 rows.append(mr)
                 existing_symbols.add(sym)
         if not rows:
