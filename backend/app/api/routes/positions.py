@@ -417,7 +417,7 @@ def _decorate_position_metrics(items: list[dict]) -> list[dict]:
     latest = _raw_repository.get_latest_account_snapshot() if _raw_repository is not None else None
     account_id = str((latest or {}).get("account_id", "") or "")
     report_date = str((latest or {}).get("report_date", "") or "")
-    realized_by_symbol = _build_realized_pnl_by_symbol(account_id=account_id, report_date=report_date)
+    realized_by_symbol = _build_realized_pnl_by_symbol(account_id="", report_date=report_date)
     previous_prices = _build_previous_prices_by_symbol(account_id=account_id, report_date=report_date)
     decorated: list[dict] = []
     for item in items:
@@ -448,7 +448,7 @@ def _decorate_position_metrics(items: list[dict]) -> list[dict]:
         realized_pnl = realized_by_symbol.get(symbol, 0.0)
         # Also compute realized PnL from trades if zero
         if realized_pnl == 0:
-            realized_pnl = _compute_realized_pnl_from_trades(symbol, account_id, report_date)
+            realized_pnl = _compute_realized_pnl_from_trades(symbol, "", report_date)
         adjusted_cost_basis = cost_basis - realized_pnl
         row["average_cost_price"] = round(average_cost, 6)
         row["cost_price_moving_weighted"] = round(average_cost, 6)
