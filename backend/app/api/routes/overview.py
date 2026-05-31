@@ -514,10 +514,11 @@ def _compute_mwrr_modified_dietz(
     v_end = _to_float(end_row.get(equity_key))
     if abs(v_begin) < 1e-12:
         return None
+    begin_date_str = str(begin_row.get("report_date", "") or "").replace("-", "")
     cash_flow_sum = 0.0
     weighted_cash_flow_sum = 0.0
     for flow_date, flow in cashflow_by_date.items():
-        if flow_date < start_date or flow_date > end_date:
+        if flow_date <= begin_date_str or flow_date > end_date:
             continue
         if abs(flow) < 1e-12:
             continue
