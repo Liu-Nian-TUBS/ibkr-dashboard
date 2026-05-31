@@ -175,8 +175,9 @@ def _sync_manual_position_snapshot(symbol: str, account_id: str = "manual") -> N
     trades = _raw_repository.es.search(
         index="ibkr_trade_records_v1",
         size=10000,
-        term_filters={"symbol": symbol.upper(), "source": "manual"},
+        term_filters={"symbol": symbol.upper(), "source": "manual", "account_id": account_id},
     )
+    trades.sort(key=lambda t: t.get("trade_date", ""))
     net_quantity = 0.0
     total_cost = 0.0
     latest_date = ""

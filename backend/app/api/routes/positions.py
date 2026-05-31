@@ -222,13 +222,38 @@ def _list_current_positions(symbol: str | None = None) -> list[dict]:
         size=10000,
         term_filters={"source": "manual"},
     )
-    existing_ids = {id(r) for r in scoped_rows}
+    # For each (symbol, account_id), keep only the latest-dated snapshot
+    latest_manual: dict[tuple[str, str], dict] = {}
+    for mr in manual_rows:
+        key = (str(mr.get("symbol", "")).upper(), str(mr.get("account_id", "")))
+        existing = latest_manual.get(key)
+        mr_date = str(mr.get("report_date", "")).replace("-", "")
+        if existing is None or mr_date > str(existing.get("report_date", "")).replace("-", ""):
+            latest_manual[key] = mr
+    # Compute current net quantity from trades to determine if position is still held
+    manual_trades = _raw_repository.es.search(
+        index="ibkr_trade_records_v1",
+        size=10000,
+        term_filters={"source": "manual"},
+    )
+    net_qty_by_key: dict[tuple[str, str], float] = {}
+    for t in sorted(manual_trades, key=lambda x: x.get("trade_date", "")):
+        key = (str(t.get("symbol", "")).upper(), str(t.get("account_id", "")))
+        side = str(t.get("side", t.get("buy_sell", ""))).upper()
+        qty = float(t.get("quantity", 0) or 0)
+        cur = net_qty_by_key.get(key, 0.0)
+        if side == "BUY":
+            net_qty_by_key[key] = cur + qty
+        elif side == "SELL":
+            net_qty_by_key[key] = cur - qty
     existing_symbols = {
         (str(r.get("symbol", "")).upper(), str(r.get("account_id", "")))
         for r in scoped_rows
     }
-    for mr in manual_rows:
-        key = (str(mr.get("symbol", "")).upper(), str(mr.get("account_id", "")))
+    for key, mr in latest_manual.items():
+        net_q = net_qty_by_key.get(key, 0.0)
+        if net_q <= 0:
+            continue  # Position fully sold
         if key not in existing_symbols:
             scoped_rows.append(mr)
             existing_symbols.add(key)
