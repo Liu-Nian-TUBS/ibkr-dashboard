@@ -535,6 +535,26 @@ def _build_pnl_leaderboard(
     }
 
 
+def _refresh_manual_snapshots_today() -> None:
+    """Create today's snapshot for each manual-source position so the PnL calendar has daily data."""
+    try:
+        from app.api.routes.manual_trades import _sync_manual_position_snapshot
+        manual_snapshots = _raw_repository.es.search(
+            index="ibkr_position_snapshots_v1",
+            size=10000,
+            term_filters={"source": "manual"},
+        )
+        seen_symbols: set[str] = set()
+        for snap in manual_snapshots:
+            sym = str(snap.get("symbol", "")).upper()
+            acct = str(snap.get("account_id", "manual"))
+            if sym and sym not in seen_symbols:
+                seen_symbols.add(sym)
+                _sync_manual_position_snapshot(sym, acct)
+    except Exception:
+        pass
+
+
 def _build_pnl_calendar(
     *,
     account_id: str | None,
@@ -543,6 +563,8 @@ def _build_pnl_calendar(
 ) -> dict:
     if _raw_repository is None:
         return {"daily": [], "monthly": []}
+    # Refresh manual position snapshots so they have today's date and market price
+    _refresh_manual_snapshots_today()
     term_filters: dict[str, str] = {}
     if account_id:
         term_filters["account_id"] = account_id

@@ -191,15 +191,17 @@ def _sync_manual_position_snapshot(symbol: str, account_id: str = "manual") -> N
         if td > latest_date:
             latest_date = td
 
-    snapshot_id = f"manual_{account_id}_{symbol.upper()}_SUMMARY"
-    report_date = latest_date.replace("-", "") if latest_date else date.today().strftime("%Y%m%d")
+    today_str = date.today().strftime("%Y%m%d")
+    snapshot_id = f"manual_{account_id}_{symbol.upper()}_{today_str}_SUMMARY"
+    report_date = today_str
 
     if net_quantity <= 0:
-        # No position left — remove snapshot
-        try:
-            _raw_repository.es.delete(index="ibkr_position_snapshots_v1", id=snapshot_id)
-        except Exception:
-            pass
+        # No position left — remove snapshot (both old and new format IDs)
+        for sid in [snapshot_id, f"manual_{account_id}_{symbol.upper()}_SUMMARY"]:
+            try:
+                _raw_repository.es.delete(index="ibkr_position_snapshots_v1", id=sid)
+            except Exception:
+                pass
         return
 
     avg_cost = total_cost / net_quantity if net_quantity else 0.0
