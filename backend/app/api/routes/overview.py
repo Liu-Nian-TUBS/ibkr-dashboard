@@ -479,20 +479,23 @@ def _compute_mwrr_modified_dietz(
     *,
     start_date: str,
     end_date: str,
+    equity_curve: list[dict] | None = None,
 ) -> float | None:
+    source = equity_curve if equity_curve else snapshots
+    equity_key = "equity" if equity_curve else "total_equity"
     ordered = sorted(
-        [row for row in snapshots if str(row.get("report_date", "") or "") <= end_date],
+        [row for row in source if str(row.get("report_date", "") or "") <= end_date],
         key=lambda row: str(row.get("report_date", "") or ""),
     )
     if len(ordered) < 2:
         return None
-    begin_candidates = [row for row in ordered if str(row.get("report_date", "") or "") < start_date and _to_float(row.get("total_equity")) > 0]
+    begin_candidates = [row for row in ordered if str(row.get("report_date", "") or "") < start_date and _to_float(row.get(equity_key)) > 0]
     if not begin_candidates:
-        begin_candidates = [row for row in ordered if str(row.get("report_date", "") or "") >= start_date and _to_float(row.get("total_equity")) > 0]
+        begin_candidates = [row for row in ordered if str(row.get("report_date", "") or "") >= start_date and _to_float(row.get(equity_key)) > 0]
     begin_row = begin_candidates[0] if begin_candidates else None
     if not begin_row:
         begin_row = next(
-            (row for row in ordered if _to_float(row.get("total_equity")) > 0),
+            (row for row in ordered if _to_float(row.get(equity_key)) > 0),
             None,
         )
     end_row = ordered[-1]
@@ -507,8 +510,8 @@ def _compute_mwrr_modified_dietz(
     total_days = (end_day - begin_day).days
     if total_days <= 0:
         return None
-    v_begin = _to_float(begin_row.get("total_equity"))
-    v_end = _to_float(end_row.get("total_equity"))
+    v_begin = _to_float(begin_row.get(equity_key))
+    v_end = _to_float(end_row.get(equity_key))
     if abs(v_begin) < 1e-12:
         return None
     cash_flow_sum = 0.0
@@ -538,11 +541,15 @@ def _compute_twr_from_snapshot_rows(
     *,
     start_date: str,
     end_date: str,
+    equity_curve: list[dict] | None = None,
 ) -> float | None:
+    # Use equity_curve (with manual) if available
+    source = equity_curve if equity_curve else snapshots
+    equity_key = "equity" if equity_curve else "total_equity"
     ordered_rows = sorted(
         [
             row
-            for row in snapshots
+            for row in source
             if str(row.get("report_date", "") or "") >= start_date
             and str(row.get("report_date", "") or "") <= end_date
         ],
@@ -555,8 +562,8 @@ def _compute_twr_from_snapshot_rows(
     for idx in range(1, len(ordered_rows)):
         prev_row = ordered_rows[idx - 1]
         row = ordered_rows[idx]
-        v_begin = _to_float(prev_row.get("total_equity"))
-        v_end = _to_float(row.get("total_equity"))
+        v_begin = _to_float(prev_row.get(equity_key))
+        v_end = _to_float(row.get(equity_key))
         if abs(v_begin) < 1e-12:
             continue
         report_date = str(row.get("report_date", "") or "")
@@ -1653,36 +1660,7 @@ def get_overview() -> dict:
         )
         current_year = str(report_date)[:4]
         year_start = f"{current_year}0101"
-        twr_ytd = _compute_twr_from_snapshot_rows(
-            all_snapshots_sorted,
-            cashflow_by_date,
-            start_date=year_start,
-            end_date=str(report_date),
-        )
-        twr_all_time = _compute_twr_from_snapshot_rows(
-            all_snapshots_sorted,
-            cashflow_by_date,
-            start_date=str(all_snapshots_sorted[0].get("report_date", "")),
-            end_date=str(report_date),
-        )
-        mwrr_ytd = _compute_mwrr_modified_dietz(
-            all_snapshots_sorted,
-            cashflow_by_date,
-            start_date=year_start,
-            end_date=str(report_date),
-        )
-        mwrr_all_time = _compute_mwrr_modified_dietz(
-            all_snapshots_sorted,
-            cashflow_by_date,
-            start_date=str(all_snapshots_sorted[0].get("report_date", "")),
-            end_date=str(report_date),
-        )
-        # Guard unstable MWRR values and fall back to TWR-based value.
-        if mwrr_ytd is not None and (mwrr_ytd < -1.0 or mwrr_ytd > 10.0):
-            mwrr_ytd = twr_ytd
-        if mwrr_all_time is not None and (mwrr_all_time < -1.0 or mwrr_all_time > 10.0):
-            mwrr_all_time = twr_all_time
-        # Merge manual trade flows into cashflow for consistent calculation
+        # Merge manual trade flows into cashflow for all return calculations
         _combined_cashflow = dict(cashflow_by_date)
         if _raw_repository is not None:
             _manual_flow_trades = _raw_repository.es.search(
@@ -1704,11 +1682,46 @@ def get_overview() -> dict:
                 elif _side == "SELL":
                     _amt = _qty * _price - _comm
                     _combined_cashflow[_td] = _combined_cashflow.get(_td, 0) - _amt
+        # Filter equity_curve to non-zero equity for return calculations
+        _filtered_curve = [row for row in equity_curve if abs(float(row.get("equity", 0) or 0)) >= 0.01]
+        twr_ytd = _compute_twr_from_snapshot_rows(
+            all_snapshots_sorted,
+            _combined_cashflow,
+            start_date=year_start,
+            end_date=str(report_date),
+            equity_curve=_filtered_curve,
+        )
+        twr_all_time = _compute_twr_from_snapshot_rows(
+            all_snapshots_sorted,
+            _combined_cashflow,
+            start_date=str(_filtered_curve[0].get("report_date", "")) if _filtered_curve else str(all_snapshots_sorted[0].get("report_date", "")),
+            end_date=str(report_date),
+            equity_curve=_filtered_curve,
+        )
+        mwrr_ytd = _compute_mwrr_modified_dietz(
+            all_snapshots_sorted,
+            _combined_cashflow,
+            start_date=year_start,
+            end_date=str(report_date),
+            equity_curve=_filtered_curve,
+        )
+        mwrr_all_time = _compute_mwrr_modified_dietz(
+            all_snapshots_sorted,
+            _combined_cashflow,
+            start_date=str(_filtered_curve[0].get("report_date", "")) if _filtered_curve else str(all_snapshots_sorted[0].get("report_date", "")),
+            end_date=str(report_date),
+            equity_curve=_filtered_curve,
+        )
+        # Guard unstable MWRR values and fall back to TWR-based value.
+        if mwrr_ytd is not None and (mwrr_ytd < -1.0 or mwrr_ytd > 10.0):
+            mwrr_ytd = twr_ytd
+        if mwrr_all_time is not None and (mwrr_all_time < -1.0 or mwrr_all_time > 10.0):
+            mwrr_all_time = twr_all_time
         ytd_simple_weighted = _compute_ytd_simple_weighted_return(
             all_snapshots_sorted,
             _combined_cashflow,
             report_date=str(report_date),
-            equity_curve=equity_curve,
+            equity_curve=_filtered_curve,
         )
 
     ytd_dividends, ytd_interest, ytd_commissions = _compute_ytd_cashflow_metrics(
