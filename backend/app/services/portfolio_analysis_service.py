@@ -762,6 +762,18 @@ class PortfolioAnalysisService:
             term_filters=filters,
         )
         all_rows = self._raw_repository.es.search(index="ibkr_position_snapshots_v1", size=10000)
+        # Include manual-source positions
+        manual_rows = self._raw_repository.es.search(
+            index="ibkr_position_snapshots_v1",
+            size=10000,
+            term_filters={"source": "manual"},
+        )
+        existing_symbols = {str(r.get("symbol", "")).upper() for r in rows}
+        for mr in manual_rows:
+            sym = str(mr.get("symbol", "")).upper()
+            if sym and sym not in existing_symbols:
+                rows.append(mr)
+                existing_symbols.add(sym)
         if not rows:
             rows = all_rows
         if not rows:

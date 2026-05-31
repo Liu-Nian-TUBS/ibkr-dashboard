@@ -381,6 +381,19 @@ def _build_unrealized_items(*, account_id: str | None, symbol: str | None) -> li
         latest_date = latest_dates[-1] if latest_dates else ""
         rows = [row for row in candidates if not latest_date or _compact_date(row.get("report_date")) == latest_date]
 
+    # Also include manual-source positions
+    manual_rows = _raw_repository.es.search(
+        index="ibkr_position_snapshots_v1",
+        size=10000,
+        term_filters={"source": "manual"},
+    )
+    existing_symbols = {str(r.get("symbol", "")).upper() for r in rows}
+    for mr in manual_rows:
+        sym = str(mr.get("symbol", "")).upper()
+        if sym and sym not in existing_symbols:
+            rows.append(mr)
+            existing_symbols.add(sym)
+
     summary_rows = [
         dict(row)
         for row in rows
