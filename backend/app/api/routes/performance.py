@@ -601,15 +601,20 @@ def _build_pnl_calendar(
     use_market_value_delta = non_zero_unrealized <= 1 and len(market_value_by_date) > 1
 
     # Build daily net trade cost (buy increases position cost, sell decreases)
-    # This represents capital deployed/withdrawn, NOT profit
+    # Exclude FX cash conversions (e.g. EUR.USD) which are not position trades
     trade_cost_daily: dict[str, float] = {}
     for trade in trades:
         trade_date = _compact_date(trade.get("trade_date"))
         if not trade_date:
             continue
-        quantity = float(trade.get("quantity", 0) or 0)
+        sym = str(trade.get("symbol", "") or "").upper()
+        asset_cat = str(trade.get("asset_category", "") or "").upper()
+        # Skip forex/cash conversions
+        if asset_cat == "CASH" or (len(sym) >= 6 and "." in sym and sym.endswith(("USD", "EUR", "GBP", "JPY", "CNH", "HKD"))):
+            continue
+        quantity = abs(float(trade.get("quantity", 0) or 0))
         price = float(trade.get("trade_price", 0) or 0)
-        side = str(trade.get("buy_sell", trade.get("side", "")) or "").upper()
+        side = str(trade.get("buy_sell") or trade.get("side") or "").upper()
         if side == "BUY":
             trade_cost_daily[trade_date] = trade_cost_daily.get(trade_date, 0.0) + quantity * price
         elif side == "SELL":
