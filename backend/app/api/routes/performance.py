@@ -401,14 +401,18 @@ def _build_unrealized_items(*, account_id: str | None, symbol: str | None) -> li
         cur = _net_qty_map.get(_k, 0.0)
         _net_qty_map[_k] = cur + _q if _s == "BUY" else cur - _q
 
-    existing_symbols = {str(r.get("symbol", "")).upper() for r in rows}
+    existing_keys = {
+        (str(r.get("symbol", "")).upper(), str(r.get("account_id", "")))
+        for r in rows
+    }
     for mr in manual_rows:
         sym = str(mr.get("symbol", "")).upper()
         acct = str(mr.get("account_id", ""))
-        if sym and sym not in existing_symbols:
-            if _net_qty_map.get((sym, acct), 0.0) > 0:
+        key = (sym, acct)
+        if sym and key not in existing_keys:
+            if _net_qty_map.get(key, 0.0) > 0:
                 rows.append(mr)
-                existing_symbols.add(sym)
+                existing_keys.add(key)
 
     summary_rows = [
         dict(row)

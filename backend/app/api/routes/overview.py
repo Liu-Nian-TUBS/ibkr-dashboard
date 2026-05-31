@@ -1293,12 +1293,15 @@ def get_overview() -> dict:
         existing_mp = _latest_manual.get(_k)
         if existing_mp is None or rd > str(existing_mp.get("report_date", "")).replace("-", ""):
             _latest_manual[_k] = mp
-    existing_symbols = {str(p.get("symbol", "")).upper() for p in latest_positions}
+    existing_keys = {
+        (str(p.get("symbol", "")).upper(), str(p.get("account_id", "")))
+        for p in latest_positions
+    }
     for _k, mp in _latest_manual.items():
         sym = _k[0]
-        if sym and sym not in existing_symbols and _overview_net_qty.get(_k, 0.0) > 0:
+        if sym and _k not in existing_keys and _overview_net_qty.get(_k, 0.0) > 0:
             latest_positions.append(mp)
-            existing_symbols.add(sym)
+            existing_keys.add(_k)
     positions_count = len(latest_positions)
     snapshot_positions_market_value = round(
         sum(float(p.get("market_value_snapshot", p.get("position_value", 0)) or 0) for p in latest_positions),
