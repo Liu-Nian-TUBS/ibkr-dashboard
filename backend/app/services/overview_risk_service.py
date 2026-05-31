@@ -80,8 +80,14 @@ def build_risk_dashboard(
     total_holding_value = sum(abs(position_market_value(position)) for position in positions)
     if total_holding_value <= 1e-9:
         total_holding_value = abs(market_value)
+    # Aggregate by symbol to get true per-symbol exposure
+    _symbol_mv: dict[str, float] = {}
+    for p in positions:
+        sym = str(p.get("symbol", "")).upper()
+        if sym:
+            _symbol_mv[sym] = _symbol_mv.get(sym, 0.0) + abs(position_market_value(p))
     sorted_values = sorted(
-        [abs(position_market_value(position)) for position in positions if abs(position_market_value(position)) > 1e-9],
+        [v for v in _symbol_mv.values() if v > 1e-9],
         reverse=True,
     )
     net_exposure = (abs(market_value) / equity * 100) if equity > 0 else None
