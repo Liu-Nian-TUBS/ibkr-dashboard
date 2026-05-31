@@ -731,21 +731,72 @@ def _compute_unrealized_pnl_for_report_date(
     account_id: str,
     report_date: str,
 ) -> float | None:
-    if not account_id or not report_date:
+    if not report_date:
         return None
-    positions = raw_repository.es.search(
+    # Get IBKR positions
+    ibkr_positions = []
+    if account_id:
+        ibkr_positions = raw_repository.es.search(
+            index="ibkr_position_snapshots_v1",
+            size=10000,
+            term_filters={"account_id": account_id, "report_date": report_date},
+        )
+    # Get manual positions for same date
+    manual_positions = raw_repository.es.search(
         index="ibkr_position_snapshots_v1",
         size=10000,
-        term_filters={"account_id": account_id, "report_date": report_date},
+        term_filters={"source": "manual", "report_date": report_date},
     )
-    if not positions:
+    all_positions = ibkr_positions + manual_positions
+    if not all_positions:
         return None
     total = 0.0
     matched = False
-    for position in positions:
+    # Get cost basis from the latest snapshot per symbol that has it
+    _cost_cache: dict[str, float] = {}
+    if account_id:
+        # Use the most recent report_date's positions which have cost_basis from XML import
+        latest_rd = raw_repository.es.search(
+            index="ibkr_position_snapshots_v1",
+            size=1,
+            term_filters={"account_id": account_id},
+            sort_field="report_date",
+            descending=True,
+        )
+        if latest_rd:
+            latest_date = str(latest_rd[0].get("report_date", ""))
+            latest_with_cost = raw_repository.es.search(
+                index="ibkr_position_snapshots_v1",
+                size=100,
+                term_filters={"account_id": account_id, "report_date": latest_date},
+            )
+            for lp in latest_with_cost:
+                sym = str(lp.get("symbol", "")).upper()
+                cost = _to_float(lp.get("cost_basis_money", 0))
+                if cost > 0 and sym:
+                    _cost_cache[sym] = cost
+    # Also check manual positions for their own cost (used for their own fallback)
+    for position in all_positions:
+        sym = str(position.get("symbol", "")).upper()
+        acct = str(position.get("account_id", ""))
+        cost = _to_float(position.get("cost_basis_money", 0))
+        if cost > 0 and sym:
+            _cost_cache.setdefault(f"{sym}:{acct}", cost)
+    for position in all_positions:
         if position.get("level_of_detail") not in {"SUMMARY", None, ""}:
             continue
-        total += _to_float(position.get("unrealized_pnl_snapshot", position.get("fifo_pnl_unrealized", 0)))
+        u = _to_float(position.get("unrealized_pnl_snapshot", position.get("fifo_pnl_unrealized", 0)))
+        # If unrealized is 0, compute from market_value - cost_basis
+        if abs(u) < 0.01:
+            mv = _to_float(position.get("market_value_snapshot", 0))
+            sym = str(position.get("symbol", "")).upper()
+            cost = _to_float(position.get("cost_basis_money", 0))
+            if cost <= 0:
+                acct = str(position.get("account_id", ""))
+                cost = _cost_cache.get(f"{sym}:{acct}", _cost_cache.get(sym, 0))
+            if mv > 0 and cost > 0:
+                u = mv - cost
+        total += u
         matched = True
     return round(total, 2) if matched else None
 
