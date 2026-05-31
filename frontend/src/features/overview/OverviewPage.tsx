@@ -206,7 +206,7 @@ function OverviewContent({
       label: "年初至今 TWR",
       value: formatPercent(data.twr_ytd),
       tone: deltaClass(data.twr_ytd),
-      hint: `年化收益率 ${formatPercent(data.ytd_simple_weighted)}`,
+      hint: `简单加权收益率 ${formatPercent(data.ytd_simple_weighted)}`,
     },
     {
       label: "年初至今 MWRR",
