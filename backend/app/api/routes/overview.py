@@ -1474,6 +1474,14 @@ def get_overview() -> dict:
             mv = float(snap.get("market_value_snapshot", 0) or 0)
             if rd and mv:
                 _manual_mv_by_date[rd] = _manual_mv_by_date.get(rd, 0.0) + mv
+        # For IBKR dates without manual snapshots, carry forward last known manual MV
+        all_curve_dates = sorted({row["report_date"] for row in equity_curve})
+        last_manual_mv = 0.0
+        for cd in all_curve_dates:
+            if cd in _manual_mv_by_date:
+                last_manual_mv = _manual_mv_by_date[cd]
+            elif last_manual_mv > 0:
+                _manual_mv_by_date[cd] = last_manual_mv
         # Add manual MV to each equity curve date, or create new entries for dates not in IBKR
         _curve_dates = {row["report_date"] for row in equity_curve}
         for rd, mv in sorted(_manual_mv_by_date.items()):
@@ -1496,7 +1504,7 @@ def get_overview() -> dict:
         equity_curve.sort(key=lambda x: x.get("report_date", ""))
     for row in equity_curve:
         if str(row.get("report_date", "") or "") == str(report_date):
-            row["equity"] = equity
+            row["equity"] = total_equity_with_manual
             row["cash"] = cash
             row["market_value"] = market_value
 
@@ -1704,40 +1712,6 @@ def get_overview() -> dict:
         asset_flow_events.extend(_cashflow_events_from_map(manual_flow_by_date))
         asset_flow_events.sort(key=lambda e: e.get("report_date", ""))
     earliest_manual_trade_date = min(manual_flow_by_date.keys()) if manual_flow_by_date else "99999999"
-    # Augment equity curve with manual positions' market value per date
-    # Build a date -> manual market_value map from snapshots
-    _manual_mv_by_date: dict[str, float] = {}
-    if _raw_repository is not None:
-        _all_manual_snaps = _raw_repository.es.search(
-            index="ibkr_position_snapshots_v1",
-            size=10000,
-            term_filters={"source": "manual"},
-        )
-        # Compute net qty per (symbol, account_id) to exclude fully-sold positions
-        _manual_net_qty: dict[tuple[str, str], float] = {}
-        for t in sorted(manual_trades if 'manual_trades' in dir() else [], key=lambda x: x.get("trade_date", "")):
-            _mk = (str(t.get("symbol", "")).upper(), str(t.get("account_id", "")))
-            _ms = str(t.get("side", t.get("buy_sell", ""))).upper()
-            _mq = float(t.get("quantity", 0) or 0)
-            _cur = _manual_net_qty.get(_mk, 0.0)
-            _manual_net_qty[_mk] = _cur + _mq if _ms == "BUY" else _cur - _mq
-        _active_keys = {k for k, v in _manual_net_qty.items() if v > 0}
-        for snap in _all_manual_snaps:
-            _sk = (str(snap.get("symbol", "")).upper(), str(snap.get("account_id", "")))
-            rd = str(snap.get("report_date", "")).replace("-", "")
-            if rd and _sk in _active_keys:
-                mv = float(snap.get("market_value_snapshot", 0) or 0)
-                _manual_mv_by_date[rd] = _manual_mv_by_date.get(rd, 0.0) + mv
-    if manual_mv > 0 or _manual_mv_by_date:
-        for row in equity_curve:
-            row_date = str(row.get("report_date", "") or "")
-            row_eq = float(row.get("equity", 0) or 0)
-            if row_eq <= 0:
-                continue
-            if row_date == str(report_date):
-                row["equity"] = row_eq + manual_mv
-            elif row_date in _manual_mv_by_date:
-                row["equity"] = row_eq + _manual_mv_by_date[row_date]
     display_equity_curve = [
         {
             **row,
