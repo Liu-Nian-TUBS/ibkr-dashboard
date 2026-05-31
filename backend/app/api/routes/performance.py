@@ -381,18 +381,34 @@ def _build_unrealized_items(*, account_id: str | None, symbol: str | None) -> li
         latest_date = latest_dates[-1] if latest_dates else ""
         rows = [row for row in candidates if not latest_date or _compact_date(row.get("report_date")) == latest_date]
 
-    # Also include manual-source positions
+    # Also include manual-source positions (only those still held)
     manual_rows = _raw_repository.es.search(
         index="ibkr_position_snapshots_v1",
         size=10000,
         term_filters={"source": "manual"},
     )
+    # Compute net quantity from trades to filter out fully-sold positions
+    manual_trades_all = _raw_repository.es.search(
+        index="ibkr_trade_records_v1",
+        size=10000,
+        term_filters={"source": "manual"},
+    )
+    _net_qty_map: dict[tuple[str, str], float] = {}
+    for t in sorted(manual_trades_all, key=lambda x: x.get("trade_date", "")):
+        _k = (str(t.get("symbol", "")).upper(), str(t.get("account_id", "")))
+        _s = str(t.get("side", t.get("buy_sell", ""))).upper()
+        _q = float(t.get("quantity", 0) or 0)
+        cur = _net_qty_map.get(_k, 0.0)
+        _net_qty_map[_k] = cur + _q if _s == "BUY" else cur - _q
+
     existing_symbols = {str(r.get("symbol", "")).upper() for r in rows}
     for mr in manual_rows:
         sym = str(mr.get("symbol", "")).upper()
+        acct = str(mr.get("account_id", ""))
         if sym and sym not in existing_symbols:
-            rows.append(mr)
-            existing_symbols.add(sym)
+            if _net_qty_map.get((sym, acct), 0.0) > 0:
+                rows.append(mr)
+                existing_symbols.add(sym)
 
     summary_rows = [
         dict(row)

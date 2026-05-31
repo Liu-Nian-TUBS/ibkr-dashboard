@@ -72,6 +72,32 @@ def create_manual_trade(payload: ManualTradeRequest) -> dict:
         "notes": payload.notes,
         "source": "manual",
     }
+    # Calculate realized PnL for SELL trades
+    if doc["side"] == "SELL":
+        prior_trades = _raw_repository.es.search(
+            index="ibkr_trade_records_v1",
+            size=10000,
+            term_filters={"symbol": doc["symbol"], "source": "manual", "account_id": doc["account_id"]},
+        )
+        prior_trades.sort(key=lambda t: t.get("trade_date", ""))
+        net_qty = 0.0
+        total_cost = 0.0
+        for t in prior_trades:
+            if t.get("trade_date", "") > trade_date:
+                break
+            s = str(t.get("side", "")).upper()
+            q = float(t.get("quantity", 0) or 0)
+            p = float(t.get("trade_price", 0) or 0)
+            if s == "BUY":
+                total_cost += q * p
+                net_qty += q
+            elif s == "SELL":
+                if net_qty > 0:
+                    total_cost -= q * (total_cost / net_qty)
+                net_qty -= q
+        if net_qty > 0:
+            avg_cost = total_cost / net_qty
+            doc["fifo_pnl_realized"] = round((doc["trade_price"] - avg_cost) * doc["quantity"], 2)
     _raw_repository.es.update(index="ibkr_trade_records_v1", id=trade_id, doc=doc, doc_as_upsert=True)
     _sync_manual_position_snapshot(doc["symbol"], doc["account_id"])
     # Trigger history backfill if needed
