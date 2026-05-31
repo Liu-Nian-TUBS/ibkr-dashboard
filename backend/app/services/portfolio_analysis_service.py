@@ -1992,6 +1992,27 @@ def _with_position_daily_changes(current_rows: list[dict], all_rows: list[dict],
                 item["previous_mark_price_snapshot"] = previous_price
                 item.setdefault("daily_change", round(current_price - previous_price, 6))
                 item.setdefault("daily_change_pct", round((current_price - previous_price) / previous_price, 6))
+        else:
+            # Fallback for manual positions: fetch previous close from sina
+            if str(item.get("source", "")).lower() == "manual":
+                try:
+                    from app.services.quote_service import fetch_sina_history
+                    from datetime import date as _date, timedelta as _td
+                    _today = _date.today()
+                    _hist = fetch_sina_history(
+                        symbol,
+                        start_date=(_today - _td(days=10)).isoformat(),
+                        end_date=_today.isoformat(),
+                    )
+                    if len(_hist) >= 2:
+                        prev_close = float(_hist[-2].get("value", 0))
+                        current_price = _to_float(item.get("mark_price_snapshot"))
+                        if prev_close and current_price:
+                            item["previous_mark_price_snapshot"] = prev_close
+                            item.setdefault("daily_change", round(current_price - prev_close, 6))
+                            item.setdefault("daily_change_pct", round((current_price - prev_close) / prev_close, 6))
+                except Exception:
+                    pass
         enriched.append(item)
     return enriched
 
