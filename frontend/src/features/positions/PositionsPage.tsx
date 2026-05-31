@@ -107,7 +107,7 @@ export function PositionsPage() {
   const overviewSourceValues = asRecord(positionData?.overview?.source_values);
   const cash = asNumber(overviewSourceValues.cash ?? positionData?.overview?.cash, 0);
   const holdingsValue = allRows.reduce((sum, row) => sum + asNumber(row.realtime_value ?? row.market_value_snapshot, 0), 0);
-  const equity = asNumber(overviewSourceValues.equity ?? positionData?.overview?.equity, holdingsValue + cash);
+  const equity = asNumber(positionData?.overview?.equity ?? overviewSourceValues.equity, holdingsValue + cash);
   const industryRows = asArray(positionData?.industry?.items);
   const mappingRows = asArray(positionData?.industryMappings?.items);
   const rowSymbols = useMemo(
