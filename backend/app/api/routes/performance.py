@@ -401,15 +401,19 @@ def _build_unrealized_items(*, account_id: str | None, symbol: str | None) -> li
         cur = _net_qty_map.get(_k, 0.0)
         _net_qty_map[_k] = cur + _q if _s == "BUY" else cur - _q
 
+    # Pick only the latest manual snapshot per (symbol, account_id)
+    _latest_manual: dict[tuple[str,str], dict] = {}
+    for mr in sorted(manual_rows, key=lambda x: _compact_date(x.get("report_date")) or ""):
+        sym = str(mr.get("symbol", "")).upper()
+        acct = str(mr.get("account_id", ""))
+        _latest_manual[(sym, acct)] = mr
+
     existing_keys = {
         (str(r.get("symbol", "")).upper(), str(r.get("account_id", "")))
         for r in rows
     }
-    for mr in manual_rows:
-        sym = str(mr.get("symbol", "")).upper()
-        acct = str(mr.get("account_id", ""))
-        key = (sym, acct)
-        if sym and key not in existing_keys:
+    for key, mr in _latest_manual.items():
+        if key[0] and key not in existing_keys:
             if _net_qty_map.get(key, 0.0) > 0:
                 rows.append(mr)
                 existing_keys.add(key)
