@@ -537,6 +537,10 @@ def _build_pnl_leaderboard(
 
 def _refresh_manual_snapshots_today() -> None:
     """Create today's snapshot for each manual-source position so the PnL calendar has daily data."""
+    from datetime import date as _date
+    # Skip weekends — no market data
+    if _date.today().weekday() >= 5:  # 5=Saturday, 6=Sunday
+        return
     try:
         from app.api.routes.manual_trades import _sync_manual_position_snapshot
         manual_snapshots = _raw_repository.es.search(
@@ -618,8 +622,15 @@ def _build_pnl_calendar(
         )
 
     # Decide whether to use unrealized_pnl or market_value delta
-    # If most dates have unrealized=0 but market_value varies, use market_value delta
-    non_zero_unrealized = sum(1 for v in unrealized_total_by_date.values() if abs(v) > 1e-6)
+    # Check only IBKR-sourced snapshots (manual ones always have unrealized_pnl set)
+    non_zero_unrealized = 0
+    for report_date, rows in positions_by_date.items():
+        ibkr_unrealized = sum(
+            _to_float(r.get("unrealized_pnl_snapshot", r.get("fifo_pnl_unrealized")))
+            for r in rows if str(r.get("source", "")).lower() != "manual"
+        )
+        if abs(ibkr_unrealized) > 1e-6:
+            non_zero_unrealized += 1
     use_market_value_delta = non_zero_unrealized <= 1 and len(market_value_by_date) > 1
 
     # Build daily net trade cost (buy increases position cost, sell decreases)
