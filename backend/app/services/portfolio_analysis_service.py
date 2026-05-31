@@ -763,6 +763,21 @@ class PortfolioAnalysisService:
         )
         all_rows = self._raw_repository.es.search(index="ibkr_position_snapshots_v1", size=10000)
         # Merge manual-source positions into IBKR positions (by symbol)
+        # First compute actual net qty per (symbol, account_id) from trades
+        _manual_trades = self._raw_repository.es.search(
+            index="ibkr_trade_records_v1",
+            size=10000,
+            term_filters={"source": "manual"},
+        )
+        _net_qty_map: dict[tuple[str, str], float] = {}
+        for t in sorted(_manual_trades, key=lambda x: x.get("trade_date", "")):
+            key = (str(t.get("symbol", "")).upper(), str(t.get("account_id", "")))
+            side = str(t.get("side", t.get("buy_sell", ""))).upper()
+            qty = float(t.get("quantity", 0) or 0)
+            cur = _net_qty_map.get(key, 0.0)
+            _net_qty_map[key] = cur + qty if side == "BUY" else cur - qty
+        # Only include positions still held (net_qty > 0)
+        _active_manual_keys = {k for k, v in _net_qty_map.items() if v > 0.0001}
         manual_rows = self._raw_repository.es.search(
             index="ibkr_position_snapshots_v1",
             size=10000,
@@ -775,6 +790,8 @@ class PortfolioAnalysisService:
             acct = str(mr.get("account_id", ""))
             rd = str(mr.get("report_date", ""))
             key = (sym, acct)
+            if key not in _active_manual_keys:
+                continue
             if key not in _manual_latest or rd > str(_manual_latest[key].get("report_date", "")):
                 _manual_latest[key] = mr
         existing_symbols = {str(r.get("symbol", "")).upper() for r in rows}
