@@ -332,18 +332,20 @@ def _select_current_position_rows(rows: list[dict]) -> list[dict]:
         if str(row.get("level_of_detail", "") or "").upper() == "SUMMARY"
     ]
     if summary_rows:
-        by_symbol: dict[str, dict] = {}
+        by_key: dict[tuple[str, str], dict] = {}
         for row in sorted(
             summary_rows,
             key=lambda item: _compact_date(item.get("report_date")),
             reverse=True,
         ):
             symbol = str(row.get("symbol", "") or "").upper()
-            if not symbol or symbol in by_symbol:
+            acct = str(row.get("account_id", "") or "")
+            key = (symbol, acct)
+            if not symbol or key in by_key:
                 continue
             row["symbol"] = symbol
-            by_symbol[symbol] = row
-        return list(by_symbol.values())
+            by_key[key] = row
+        return list(by_key.values())
 
     aggregated: dict[str, dict] = {}
     for row in rows:
