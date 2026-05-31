@@ -340,8 +340,8 @@ function OverviewContent({
                 <div className="chart-kpi-pair">
                   <ChartKpi
                     label="累计收益"
-                    value={formatCurrency(data.total_pnl, currency)}
-                    tone={deltaClass(data.total_pnl ?? 0)}
+                    value={formatCurrency(returnSummary.amount, currency)}
+                    tone={deltaClass(returnSummary.amount ?? 0)}
                   />
                   <ChartKpi
                     label="收益率"
