@@ -1321,6 +1321,16 @@ def get_overview() -> dict:
         _unrealized_sum += _u
     unrealized_pnl = round(_unrealized_sum, 2)
     realized_pnl = float(latest.get("realized_pnl", 0) or 0)
+    # Add manual trades' realized PnL
+    if _raw_repository is not None:
+        _manual_realized_trades = _raw_repository.es.search(
+            index="ibkr_trade_records_v1",
+            size=10000,
+            term_filters={"source": "manual"},
+        )
+        for _mrt in _manual_realized_trades:
+            realized_pnl += float(_mrt.get("fifo_pnl_realized", 0) or 0)
+    realized_pnl = round(realized_pnl, 2)
     total_pnl = round(realized_pnl + unrealized_pnl, 2)
 
     enriched_positions: list[dict] = []
@@ -1525,6 +1535,16 @@ def get_overview() -> dict:
     )
     if realized_pnl_until_report_date is not None:
         realized_pnl = realized_pnl_until_report_date
+        # Add manual trades' realized PnL
+        if _raw_repository is not None:
+            _manual_rpnl_trades = _raw_repository.es.search(
+                index="ibkr_trade_records_v1",
+                size=10000,
+                term_filters={"source": "manual"},
+            )
+            for _mrt in _manual_rpnl_trades:
+                realized_pnl += float(_mrt.get("fifo_pnl_realized", 0) or 0)
+            realized_pnl = round(realized_pnl, 2)
         total_pnl = round(realized_pnl + unrealized_pnl, 2)
     if ytd_commissions is None or abs(ytd_commissions) < 1e-9:
         fallback_commissions = _compute_ytd_commissions_from_trades(
@@ -1551,6 +1571,16 @@ def get_overview() -> dict:
         if ytd_commissions is not None
         else float(latest.get("commissions", 0) or 0)
     )
+    # Add manual trades' commissions
+    if _raw_repository is not None:
+        _manual_comm_trades = _raw_repository.es.search(
+            index="ibkr_trade_records_v1",
+            size=10000,
+            term_filters={"source": "manual"},
+        )
+        for _mct in _manual_comm_trades:
+            commissions += abs(float(_mct.get("ib_commission", 0) or 0))
+    commissions = round(commissions, 2)
     source_values = {
         "equity": equity,
         "cash": cash,
@@ -1589,7 +1619,9 @@ def get_overview() -> dict:
         )
     )
     asset_flow_events = _cashflow_events_from_map(cashflow_by_date_for_curves)
-    # Inject manual trades as flow events (buy = inflow, sell = outflow)
+    # Inject manual trades as flow events (buy = deposit then buy, sell = sell then withdraw)
+    # BUY: inflow = qty * price + commission (deposit covers cost + commission)
+    # SELL: outflow = qty * price - commission (withdraw proceeds minus commission)
     manual_flow_by_date: dict[str, float] = {}
     if _raw_repository is not None:
         manual_trades = _raw_repository.es.search(
@@ -1602,19 +1634,44 @@ def get_overview() -> dict:
             side = str(t.get("side", t.get("buy_sell", ""))).upper()
             qty = float(t.get("quantity", 0) or 0)
             price = float(t.get("trade_price", 0) or 0)
+            commission = abs(float(t.get("ib_commission", 0) or 0))
             td = str(t.get("trade_date", "") or "").replace("-", "")
             if not td:
                 continue
-            amount = qty * price
             if side == "BUY":
+                amount = qty * price + commission
                 manual_flow_by_date[td] = manual_flow_by_date.get(td, 0) + amount
             elif side == "SELL":
+                amount = qty * price - commission
                 manual_flow_by_date[td] = manual_flow_by_date.get(td, 0) - amount
         asset_flow_events.extend(_cashflow_events_from_map(manual_flow_by_date))
         asset_flow_events.sort(key=lambda e: e.get("report_date", ""))
     earliest_manual_trade_date = min(manual_flow_by_date.keys()) if manual_flow_by_date else "99999999"
-    # Augment equity curve with manual positions
-    if manual_cost > 0 or manual_mv > 0:
+    # Augment equity curve with manual positions' market value per date
+    # Build a date -> manual market_value map from snapshots
+    _manual_mv_by_date: dict[str, float] = {}
+    if _raw_repository is not None:
+        _all_manual_snaps = _raw_repository.es.search(
+            index="ibkr_position_snapshots_v1",
+            size=10000,
+            term_filters={"source": "manual"},
+        )
+        # Compute net qty per (symbol, account_id) to exclude fully-sold positions
+        _manual_net_qty: dict[tuple[str, str], float] = {}
+        for t in sorted(manual_trades if 'manual_trades' in dir() else [], key=lambda x: x.get("trade_date", "")):
+            _mk = (str(t.get("symbol", "")).upper(), str(t.get("account_id", "")))
+            _ms = str(t.get("side", t.get("buy_sell", ""))).upper()
+            _mq = float(t.get("quantity", 0) or 0)
+            _cur = _manual_net_qty.get(_mk, 0.0)
+            _manual_net_qty[_mk] = _cur + _mq if _ms == "BUY" else _cur - _mq
+        _active_keys = {k for k, v in _manual_net_qty.items() if v > 0}
+        for snap in _all_manual_snaps:
+            _sk = (str(snap.get("symbol", "")).upper(), str(snap.get("account_id", "")))
+            rd = str(snap.get("report_date", "")).replace("-", "")
+            if rd and _sk in _active_keys:
+                mv = float(snap.get("market_value_snapshot", 0) or 0)
+                _manual_mv_by_date[rd] = _manual_mv_by_date.get(rd, 0.0) + mv
+    if manual_mv > 0 or _manual_mv_by_date:
         for row in equity_curve:
             row_date = str(row.get("report_date", "") or "")
             row_eq = float(row.get("equity", 0) or 0)
@@ -1622,8 +1679,8 @@ def get_overview() -> dict:
                 continue
             if row_date == str(report_date):
                 row["equity"] = row_eq + manual_mv
-            elif row_date >= earliest_manual_trade_date:
-                row["equity"] = row_eq + manual_cost
+            elif row_date in _manual_mv_by_date:
+                row["equity"] = row_eq + _manual_mv_by_date[row_date]
     display_equity_curve = [
         {
             **row,
