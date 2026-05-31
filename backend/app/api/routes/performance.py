@@ -671,17 +671,92 @@ def _build_pnl_calendar(
 
     unrealized_daily_map: dict[str, float] = {}
     if use_market_value_delta:
-        previous_mv: float | None = None
-        for report_date in sorted(market_value_by_date):
-            current_mv = market_value_by_date[report_date]
-            # Daily PnL = MV change - net capital deployed - realized (counted separately)
-            day_realized = realized_daily_map.get(report_date, 0.0)
-            day_trade_cost = trade_cost_daily.get(report_date, 0.0)
-            delta = 0.0 if previous_mv is None else current_mv - previous_mv - day_trade_cost - day_realized
-            previous_mv = current_mv
-            if start_date and report_date < start_date:
+        # Per-symbol+account market value by date to avoid cross-account mismatches
+        symbol_mv_by_date: dict[tuple[str,str], dict[str, float]] = {}  # {(symbol,acct): {date: mv}}
+        for report_date, rows in positions_by_date.items():
+            summary_rows = [
+                row for row in rows
+                if str(row.get("level_of_detail", "") or "").upper() == "SUMMARY"
+            ]
+            selected = summary_rows or rows
+            for row in selected:
+                sym = str(row.get("symbol", "") or "").upper()
+                acct = str(row.get("account_id", "") or "")
+                if not sym:
+                    continue
+                key = (sym, acct)
+                mv = _to_float(row.get("market_value_snapshot", row.get("position_value")))
+                symbol_mv_by_date.setdefault(key, {})[report_date] = (
+                    symbol_mv_by_date.get(key, {}).get(report_date, 0.0) + mv
+                )
+
+        # Per-symbol+account trade cost by date
+        symbol_trade_cost: dict[tuple[str,str], dict[str, float]] = {}
+        for trade in trades:
+            trade_date = _compact_date(trade.get("trade_date"))
+            sym = str(trade.get("symbol", "") or "").upper()
+            acct = str(trade.get("account_id", "") or "")
+            if not trade_date or not sym:
                 continue
-            unrealized_daily_map[report_date] = delta
+            asset_cat = str(trade.get("asset_category", "") or "").upper()
+            if asset_cat == "CASH" or (len(sym) >= 6 and "." in sym and sym.endswith(("USD", "EUR", "GBP", "JPY", "CNH", "HKD"))):
+                continue
+            quantity = abs(float(trade.get("quantity", 0) or 0))
+            price = float(trade.get("trade_price", 0) or 0)
+            side = str(trade.get("buy_sell") or trade.get("side") or "").upper()
+            cost = quantity * price if side == "BUY" else -quantity * price
+            key = (sym, acct)
+            symbol_trade_cost.setdefault(key, {})[trade_date] = (
+                symbol_trade_cost.get(key, {}).get(trade_date, 0.0) + cost
+            )
+
+        # Per-symbol+account realized by date
+        symbol_realized: dict[tuple[str,str], dict[str, float]] = {}
+        for trade in trades:
+            trade_date = _compact_date(trade.get("trade_date"))
+            sym = str(trade.get("symbol", "") or "").upper()
+            acct = str(trade.get("account_id", "") or "")
+            if not trade_date or not sym:
+                continue
+            rpnl = float(trade.get("fifo_pnl_realized", 0) or 0)
+            if abs(rpnl) > 1e-9:
+                key = (sym, acct)
+                symbol_realized.setdefault(key, {})[trade_date] = (
+                    symbol_realized.get(key, {}).get(trade_date, 0.0) + rpnl
+                )
+
+        # Calculate per-symbol daily PnL, then aggregate
+        all_dates = sorted(market_value_by_date.keys())
+
+        # Handle symbols that are sold: add MV=0 on sell date so delta accounts for position exit
+        for trade in trades:
+            trade_date = _compact_date(trade.get("trade_date"))
+            sym = str(trade.get("symbol", "") or "").upper()
+            acct = str(trade.get("account_id", "") or "")
+            side = str(trade.get("buy_sell") or trade.get("side") or "").upper()
+            if not trade_date or not sym or side != "SELL":
+                continue
+            asset_cat = str(trade.get("asset_category", "") or "").upper()
+            if asset_cat == "CASH" or (len(sym) >= 6 and "." in sym and sym.endswith(("USD", "EUR", "GBP", "JPY", "CNH", "HKD"))):
+                continue
+            key = (sym, acct)
+            if key in symbol_mv_by_date:
+                dates_after = [d for d in symbol_mv_by_date[key] if d >= trade_date]
+                if not dates_after:
+                    symbol_mv_by_date[key][trade_date] = 0.0
+
+        for key, date_mv in symbol_mv_by_date.items():
+            sorted_dates = sorted(date_mv.keys())
+            prev_mv_s: float | None = None
+            for dt in sorted_dates:
+                cur_mv = date_mv[dt]
+                if prev_mv_s is not None:
+                    day_cost = symbol_trade_cost.get(key, {}).get(dt, 0.0)
+                    day_real = symbol_realized.get(key, {}).get(dt, 0.0)
+                    delta = cur_mv - prev_mv_s - day_cost - day_real
+                    if not (start_date and dt < start_date):
+                        unrealized_daily_map[dt] = unrealized_daily_map.get(dt, 0.0) + delta
+                prev_mv_s = cur_mv
     else:
         previous_unrealized: float | None = None
         for report_date in sorted(unrealized_total_by_date):
