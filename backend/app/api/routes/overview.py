@@ -623,10 +623,11 @@ def _compute_ytd_simple_weighted_return(
             return None
         begin_equity = _to_float(begin_row.get("total_equity"))
         current_equity = _to_float(ordered[-1].get("total_equity"))
+    begin_date = str(begin_row.get("report_date", "") or "")
     net_inflow = sum(
         _to_float(amount)
         for day, amount in cashflow_by_date.items()
-        if str(day) >= year_start and str(day) <= str(report_date)
+        if str(day) > begin_date and str(day) <= str(report_date)
     )
     denominator = begin_equity + net_inflow
     if abs(denominator) < 1e-12:
