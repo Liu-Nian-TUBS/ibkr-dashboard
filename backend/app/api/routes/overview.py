@@ -752,10 +752,9 @@ def _compute_unrealized_pnl_for_report_date(
         return None
     total = 0.0
     matched = False
-    # Get cost basis from the latest snapshot per symbol that has it
-    _cost_cache: dict[str, float] = {}
+    # Get cost-per-share from the latest snapshot per symbol that has cost_basis
+    _cps_cache: dict[str, float] = {}  # symbol -> cost_per_share
     if account_id:
-        # Use the most recent report_date's positions which have cost_basis from XML import
         latest_rd = raw_repository.es.search(
             index="ibkr_position_snapshots_v1",
             size=1,
@@ -773,27 +772,31 @@ def _compute_unrealized_pnl_for_report_date(
             for lp in latest_with_cost:
                 sym = str(lp.get("symbol", "")).upper()
                 cost = _to_float(lp.get("cost_basis_money", 0))
-                if cost > 0 and sym:
-                    _cost_cache[sym] = cost
-    # Also check manual positions for their own cost (used for their own fallback)
+                qty = _to_float(lp.get("quantity", 0))
+                if cost > 0 and qty > 0 and sym:
+                    _cps_cache[sym] = cost / qty
+    # Also get cost-per-share from manual positions in all_positions
     for position in all_positions:
         sym = str(position.get("symbol", "")).upper()
         acct = str(position.get("account_id", ""))
         cost = _to_float(position.get("cost_basis_money", 0))
-        if cost > 0 and sym:
-            _cost_cache.setdefault(f"{sym}:{acct}", cost)
+        qty = _to_float(position.get("quantity", 0))
+        if cost > 0 and qty > 0 and sym:
+            _cps_cache.setdefault(f"{sym}:{acct}", cost / qty)
     for position in all_positions:
         if position.get("level_of_detail") not in {"SUMMARY", None, ""}:
             continue
         u = _to_float(position.get("unrealized_pnl_snapshot", position.get("fifo_pnl_unrealized", 0)))
-        # If unrealized is 0, compute from market_value - cost_basis
+        # If unrealized is 0, compute from market_value - cost_per_share * qty
         if abs(u) < 0.01:
             mv = _to_float(position.get("market_value_snapshot", 0))
             sym = str(position.get("symbol", "")).upper()
+            acct = str(position.get("account_id", ""))
+            pos_qty = _to_float(position.get("quantity", 0))
             cost = _to_float(position.get("cost_basis_money", 0))
-            if cost <= 0:
-                acct = str(position.get("account_id", ""))
-                cost = _cost_cache.get(f"{sym}:{acct}", _cost_cache.get(sym, 0))
+            if cost <= 0 and pos_qty > 0:
+                cps = _cps_cache.get(f"{sym}:{acct}", _cps_cache.get(sym, 0))
+                cost = cps * pos_qty
             if mv > 0 and cost > 0:
                 u = mv - cost
         total += u
