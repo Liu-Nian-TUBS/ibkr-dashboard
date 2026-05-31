@@ -771,6 +771,7 @@ function aiProviderLabel(provider: string): string {
   if (provider === "minimax") return "MiniMax";
   if (provider === "deepseek") return "DeepSeek";
   if (provider === "mock") return "Mock AI";
+  if (provider === "custom") return "自定义模型";
   if (provider === "local_rules") return "本地规则";
   return provider || "模型";
 }
