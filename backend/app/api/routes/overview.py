@@ -1267,16 +1267,36 @@ def get_overview() -> dict:
                 p.get("unrealized_pnl_snapshot", p.get("fifo_pnl_unrealized", 0)) or 0
             )
         latest_positions = list(aggregated.values())
-    # Also include manual-source positions not already present
+    # Also include manual-source positions not already present (only if still held)
     manual_positions = _raw_repository.es.search(
         index="ibkr_position_snapshots_v1",
         size=10000,
         term_filters={"source": "manual"},
     )
-    existing_symbols = {str(p.get("symbol", "")).upper() for p in latest_positions}
+    # Compute net qty from trades to exclude fully-sold positions
+    _overview_manual_trades = _raw_repository.es.search(
+        index="ibkr_trade_records_v1",
+        size=10000,
+        term_filters={"source": "manual"},
+    )
+    _overview_net_qty: dict[tuple[str, str], float] = {}
+    for _t in sorted(_overview_manual_trades, key=lambda x: x.get("trade_date", "")):
+        _k = (str(_t.get("symbol", "")).upper(), str(_t.get("account_id", "")))
+        _s = str(_t.get("side", _t.get("buy_sell", ""))).upper()
+        _q = float(_t.get("quantity", 0) or 0)
+        _overview_net_qty[_k] = _overview_net_qty.get(_k, 0.0) + (_q if _s == "BUY" else -_q)
+    # Keep latest snapshot per (symbol, account_id) and filter by held
+    _latest_manual: dict[tuple[str, str], dict] = {}
     for mp in manual_positions:
-        sym = str(mp.get("symbol", "")).upper()
-        if sym and sym not in existing_symbols:
+        _k = (str(mp.get("symbol", "")).upper(), str(mp.get("account_id", "")))
+        rd = str(mp.get("report_date", "")).replace("-", "")
+        existing_mp = _latest_manual.get(_k)
+        if existing_mp is None or rd > str(existing_mp.get("report_date", "")).replace("-", ""):
+            _latest_manual[_k] = mp
+    existing_symbols = {str(p.get("symbol", "")).upper() for p in latest_positions}
+    for _k, mp in _latest_manual.items():
+        sym = _k[0]
+        if sym and sym not in existing_symbols and _overview_net_qty.get(_k, 0.0) > 0:
             latest_positions.append(mp)
             existing_symbols.add(sym)
     positions_count = len(latest_positions)
