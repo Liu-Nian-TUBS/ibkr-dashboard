@@ -1747,9 +1747,8 @@ def get_overview() -> dict:
         }
         for row in equity_curve
     ]
-    # Strip leading zero-equity entries (account not yet active)
-    while display_equity_curve and abs(float(display_equity_curve[0].get("equity", 0) or 0)) < 0.01:
-        display_equity_curve.pop(0)
+    # Strip zero-equity entries (account inactive/empty report days)
+    display_equity_curve = [row for row in display_equity_curve if abs(float(row.get("equity", 0) or 0)) >= 0.01]
     display_asset_flow_events = [
         {
             **event,
