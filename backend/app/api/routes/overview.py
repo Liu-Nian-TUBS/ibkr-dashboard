@@ -1460,6 +1460,40 @@ def get_overview() -> dict:
         for row in curve_source
         if row.get("report_date")
     ]
+    # Merge manual position snapshots into equity curve
+    if _raw_repository is not None:
+        _manual_snaps = _raw_repository.es.search(
+            index="ibkr_position_snapshots_v1",
+            size=10000,
+            term_filters={"source": "manual"},
+        )
+        # Build manual MV by date (only for positions still held or held at that time)
+        _manual_mv_by_date: dict[str, float] = {}
+        for snap in _manual_snaps:
+            rd = str(snap.get("report_date", "") or "").replace("-", "")
+            mv = float(snap.get("market_value_snapshot", 0) or 0)
+            if rd and mv:
+                _manual_mv_by_date[rd] = _manual_mv_by_date.get(rd, 0.0) + mv
+        # Add manual MV to each equity curve date, or create new entries for dates not in IBKR
+        _curve_dates = {row["report_date"] for row in equity_curve}
+        for rd, mv in sorted(_manual_mv_by_date.items()):
+            if rd == str(report_date):  # Current date already includes manual in equity
+                continue
+            if rd in _curve_dates:
+                for row in equity_curve:
+                    if row["report_date"] == rd:
+                        row["equity"] = float(row["equity"]) + mv
+                        row["market_value"] = float(row["market_value"]) + mv
+                        break
+            else:
+                equity_curve.append({
+                    "report_date": rd,
+                    "report_date_iso": normalize_date_to_iso(rd),
+                    "equity": mv,
+                    "cash": 0.0,
+                    "market_value": mv,
+                })
+        equity_curve.sort(key=lambda x: x.get("report_date", ""))
     for row in equity_curve:
         if str(row.get("report_date", "") or "") == str(report_date):
             row["equity"] = equity
@@ -1713,6 +1747,9 @@ def get_overview() -> dict:
         }
         for row in equity_curve
     ]
+    # Strip leading zero-equity entries (account not yet active)
+    while display_equity_curve and abs(float(display_equity_curve[0].get("equity", 0) or 0)) < 0.01:
+        display_equity_curve.pop(0)
     display_asset_flow_events = [
         {
             **event,
