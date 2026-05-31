@@ -26,7 +26,7 @@ pull_frequency_update_handler: Callable[[int], None] | None = None
 telegram_report_update_handler: Callable[[], None] | None = None
 SUPPORTED_AI_PROVIDERS = {"openai", "minimax", "deepseek", "custom", "mock"}
 MAX_AI_MODEL_LENGTH = 100
-SUPPORTED_FUTU_CONNECTION_MODES = {"disabled", "local_opend", "longbridge"}
+SUPPORTED_FUTU_CONNECTION_MODES = {"disabled", "local_opend", "longbridge", "sina"}
 DEFAULT_HISTORY_REFRESH_SYMBOLS = ["SPY", "QQQ", "DIA", "IWM", "^GSPC", "^IXIC", "^NDX", "^VIX"]
 AI_MODEL_OPTIONS = {
     "openai": [

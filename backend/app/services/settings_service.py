@@ -27,7 +27,7 @@ class AppSettings:
     deepseek_base_url: str = "https://api.deepseek.com"
     custom_api_key: str = ""
     custom_base_url: str = "http://127.0.0.1:8080/v1"
-    futu_connection_mode: str = "disabled"
+    futu_connection_mode: str = "disabled"  # disabled | local_opend | longbridge | sina
     futu_opend_host: str = "127.0.0.1"
     futu_opend_port: int = 11111
     telegram_bot_token: str = ""

@@ -11,6 +11,8 @@ from app.services.quote_service import QuoteService
 from app.services.quote_service import fetch_benchmark_history
 from app.services.quote_service import fetch_longbridge_candles
 from app.services.quote_service import fetch_longbridge_quote
+from app.services.quote_service import fetch_sina_history
+from app.services.quote_service import fetch_sina_quote
 from app.utils.longbridge import longbridge_records
 from app.utils.longbridge import run_longbridge_json
 from app.utils.numbers import optional_float as _float_or_none
@@ -49,8 +51,16 @@ class QuoteFallbackMarketDataProvider:
 
     def get_quote(self, symbol: str) -> dict:
         if self._quote_service is None:
+            # Try sina as last resort
+            sina_price = fetch_sina_quote(symbol)
+            if sina_price is not None:
+                return {"status": "ready", "symbol": symbol.upper(), "price": sina_price, "source": "sina"}
             return {"status": "unavailable", "symbol": symbol.upper(), "price": None, "source": self.name}
         quote = self._quote_service.get_quote(symbol.upper())
+        if quote.price is None or quote.source == "snapshot":
+            sina_price = fetch_sina_quote(symbol)
+            if sina_price is not None:
+                return {"status": "ready", "symbol": symbol.upper(), "price": sina_price, "source": "sina"}
         return {"status": quote.status, "symbol": quote.symbol, "price": quote.price, "source": quote.source}
 
     def get_kline_history(self, symbol: str, *, days: int = 90) -> list[MarketDataPoint]:
@@ -232,6 +242,52 @@ class LongbridgeReadOnlyProvider:
         return _fetch_longbridge_topic_sentiment(_normalize_longbridge_symbol(symbol))
 
 
+class SinaFinanceProvider:
+    """Market data provider using Sina Finance (新浪美股) free API."""
+
+    name = "sina"
+
+    def get_quote(self, symbol: str) -> dict:
+        price = fetch_sina_quote(symbol)
+        if price is None:
+            return _unavailable_quote(symbol.upper(), self.name, "sina_quote_unavailable")
+        return {
+            "status": "ready",
+            "symbol": symbol.upper(),
+            "price": price,
+            "source": self.name,
+            "as_of": "",
+        }
+
+    def get_kline_history(self, symbol: str, *, days: int = 90) -> list[MarketDataPoint]:
+        end_date = date.today()
+        start_date = end_date - timedelta(days=max(days * 2, days + 30))
+        rows = fetch_sina_history(
+            symbol.upper(),
+            start_date=start_date.isoformat(),
+            end_date=end_date.isoformat(),
+        )
+        return [
+            MarketDataPoint(
+                date=str(row.get("date", "")),
+                open=_float_or_none(row.get("open")),
+                high=_float_or_none(row.get("high")),
+                low=_float_or_none(row.get("low")),
+                close=_float_or_none(row.get("value")),
+                volume=row.get("volume"),
+                source="sina",
+            )
+            for row in rows[-days:]
+            if row.get("date") and _float_or_none(row.get("value")) is not None
+        ]
+
+    def get_option_indicators(self, symbol: str) -> dict:
+        return {"status": "missing_data", "symbol": symbol.upper(), "source": self.name}
+
+    def get_sentiment(self, symbol: str) -> dict:
+        return {"status": "missing_data", "symbol": symbol.upper(), "source": self.name}
+
+
 def build_market_data_provider(
     settings: object,
     quote_service: QuoteService | None = None,
@@ -241,6 +297,8 @@ def build_market_data_provider(
         return build_futu_opend_provider(settings)
     if mode == "longbridge":
         return LongbridgeReadOnlyProvider()
+    if mode == "sina":
+        return SinaFinanceProvider()
     return QuoteFallbackMarketDataProvider(quote_service)
 
 

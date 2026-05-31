@@ -29,7 +29,7 @@ interface SettingsForm {
   deepseek_base_url: string;
   custom_api_key: string;
   custom_base_url: string;
-  futu_connection_mode: "disabled" | "local_opend" | "longbridge";
+  futu_connection_mode: "disabled" | "local_opend" | "longbridge" | "sina";
   futu_opend_host: string;
   futu_opend_port: number;
   telegram_bot_token: string;
@@ -188,6 +188,7 @@ export function SettingsPage() {
   }, [loadAiModels]);
 
   useEffect(() => {
+    if (form.ai_provider === "custom") return; // custom allows free-text input
     const options = aiModelCatalog[form.ai_provider]?.models ?? [];
     if (!options.length || options.some((option) => option.value === form.ai_model)) return;
     setForm((current) => ({ ...current, ai_model: defaultAiModel(current.ai_provider, aiModelCatalog) }));
@@ -381,6 +382,7 @@ export function SettingsPage() {
                     <select value={form.futu_connection_mode} onChange={(event) => setForm({ ...form, futu_connection_mode: event.target.value as SettingsForm["futu_connection_mode"] })}>
                       <option value="disabled">关闭</option>
                       <option value="longbridge">长桥</option>
+                      <option value="sina">新浪美股</option>
                       <option value="local_opend">本地 OpenD</option>
                     </select>
                   </Field>

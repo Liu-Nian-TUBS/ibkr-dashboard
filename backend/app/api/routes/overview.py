@@ -457,11 +457,15 @@ def _compute_mwrr_modified_dietz(
     )
     if len(ordered) < 2:
         return None
-    begin_candidates = [row for row in ordered if str(row.get("report_date", "") or "") < start_date]
-    begin_row = begin_candidates[-1] if begin_candidates else next(
-        (row for row in ordered if str(row.get("report_date", "") or "") >= start_date),
-        None,
-    )
+    begin_candidates = [row for row in ordered if str(row.get("report_date", "") or "") < start_date and _to_float(row.get("total_equity")) > 0]
+    if not begin_candidates:
+        begin_candidates = [row for row in ordered if str(row.get("report_date", "") or "") >= start_date and _to_float(row.get("total_equity")) > 0]
+    begin_row = begin_candidates[0] if begin_candidates else None
+    if not begin_row:
+        begin_row = next(
+            (row for row in ordered if _to_float(row.get("total_equity")) > 0),
+            None,
+        )
     end_row = ordered[-1]
     if begin_row is None:
         return None
@@ -604,14 +608,6 @@ def _build_cashflow_map_from_funds_lines(
             continue
         amount = _to_float(row.get("amount"))
         result[row_date] = result.get(row_date, 0.0) + amount
-    snapshot_flows = _build_cashflow_map_from_account_snapshots(
-        raw_repository=raw_repository,
-        account_id=account_id,
-        report_date=report_date,
-    )
-    for row_date, amount in snapshot_flows.items():
-        if row_date not in result:
-            result[row_date] = amount
     return result
 
 
@@ -1189,11 +1185,16 @@ def get_overview() -> dict:
         previous_equity = float(previous_snapshot.get("total_equity", 0) or 0)
         daily_change = equity - previous_equity
 
-    if _derived_repository is not None and account_id and report_date:
-        doc_id = f"{account_id}_{report_date}_daily"
-        perf = _derived_repository.get_portfolio_return(doc_id)
-        if perf is not None:
-            daily_return = perf.get("simple_return")
+    # Compute daily_return from equity change minus actual cash flows (not ChangeInNAV)
+    if previous_equity and previous_equity > 0:
+        cashflow_map = _build_cashflow_map_from_funds_lines(
+            raw_repository=_raw_repository,
+            account_id=account_id,
+            report_date=report_date,
+            display_currency=display_currency,
+        )
+        day_inflow = cashflow_map.get(str(report_date), 0.0)
+        daily_return = (equity - previous_equity - day_inflow) / previous_equity
     reconciliation_summary = None
     if _derived_repository is not None:
         latest_recon = _derived_repository.get_latest_reconciliation_result()
@@ -1266,16 +1267,59 @@ def get_overview() -> dict:
                 p.get("unrealized_pnl_snapshot", p.get("fifo_pnl_unrealized", 0)) or 0
             )
         latest_positions = list(aggregated.values())
+    # Also include manual-source positions not already present
+    manual_positions = _raw_repository.es.search(
+        index="ibkr_position_snapshots_v1",
+        size=10000,
+        term_filters={"source": "manual"},
+    )
+    existing_symbols = {str(p.get("symbol", "")).upper() for p in latest_positions}
+    for mp in manual_positions:
+        sym = str(mp.get("symbol", "")).upper()
+        if sym and sym not in existing_symbols:
+            latest_positions.append(mp)
+            existing_symbols.add(sym)
     positions_count = len(latest_positions)
     snapshot_positions_market_value = round(
         sum(float(p.get("market_value_snapshot", p.get("position_value", 0)) or 0) for p in latest_positions),
         2,
     )
-    market_value = snapshot_positions_market_value
-    unrealized_pnl = round(
-        sum(float(p.get("unrealized_pnl_snapshot", p.get("fifo_pnl_unrealized", 0)) or 0) for p in latest_positions),
+    # Add manual positions' market value to equity
+    manual_positions_list = [p for p in latest_positions if p.get("source") == "manual"]
+    manual_mv = round(
+        sum(float(p.get("market_value_snapshot", 0) or 0) for p in manual_positions_list),
         2,
     )
+    manual_cost = round(
+        sum(float(p.get("cost_basis_money", 0) or 0) for p in manual_positions_list),
+        2,
+    )
+    # Do NOT add manual_mv to equity (equity tracks IBKR account only)
+    # Instead compute total_equity for display
+    total_equity_with_manual = equity + manual_mv
+    market_value = snapshot_positions_market_value
+    # Compute unrealized PnL: fallback to market_value - cost when snapshot is 0
+    _unrealized_sum = 0.0
+    for _p in latest_positions:
+        _u = float(_p.get("unrealized_pnl_snapshot", _p.get("fifo_pnl_unrealized", 0)) or 0)
+        if _u == 0:
+            _mv = float(_p.get("market_value_snapshot", _p.get("position_value", 0)) or 0)
+            _cb = float(_p.get("cost_basis_money", 0) or 0)
+            _qty = float(_p.get("quantity", _p.get("position", 0)) or 0)
+            if _cb == 0 and _qty:
+                from app.api.routes.positions import _compute_avg_cost_from_trades, _compact_date
+                _avg = _compute_avg_cost_from_trades(
+                    symbol=str(_p.get("symbol", "")),
+                    quantity=_qty,
+                    account_id=str(_p.get("account_id", "")),
+                    report_date=str(_p.get("report_date", "")),
+                )
+                if _avg > 0:
+                    _cb = _avg * abs(_qty)
+            if _cb > 0 and _mv:
+                _u = _mv - _cb
+        _unrealized_sum += _u
+    unrealized_pnl = round(_unrealized_sum, 2)
     realized_pnl = float(latest.get("realized_pnl", 0) or 0)
     total_pnl = round(realized_pnl + unrealized_pnl, 2)
 
@@ -1534,15 +1578,6 @@ def get_overview() -> dict:
         }
         for item in top_holdings
     ]
-    display_equity_curve = [
-        {
-            **row,
-            "equity": _convert_money(row.get("equity"), fx_rate),
-            "cash": _convert_money(row.get("cash"), fx_rate),
-            "market_value": _convert_money(row.get("market_value"), fx_rate),
-        }
-        for row in equity_curve
-    ]
     cashflow_by_date_for_curves = (
         cashflow_by_date
         if "cashflow_by_date" in locals()
@@ -1554,6 +1589,50 @@ def get_overview() -> dict:
         )
     )
     asset_flow_events = _cashflow_events_from_map(cashflow_by_date_for_curves)
+    # Inject manual trades as flow events (buy = inflow, sell = outflow)
+    manual_flow_by_date: dict[str, float] = {}
+    if _raw_repository is not None:
+        manual_trades = _raw_repository.es.search(
+            index="ibkr_trade_records_v1",
+            size=10000,
+            term_filters={"source": "manual"},
+        )
+        manual_flow_by_date.clear()
+        for t in manual_trades:
+            side = str(t.get("side", t.get("buy_sell", ""))).upper()
+            qty = float(t.get("quantity", 0) or 0)
+            price = float(t.get("trade_price", 0) or 0)
+            td = str(t.get("trade_date", "") or "").replace("-", "")
+            if not td:
+                continue
+            amount = qty * price
+            if side == "BUY":
+                manual_flow_by_date[td] = manual_flow_by_date.get(td, 0) + amount
+            elif side == "SELL":
+                manual_flow_by_date[td] = manual_flow_by_date.get(td, 0) - amount
+        asset_flow_events.extend(_cashflow_events_from_map(manual_flow_by_date))
+        asset_flow_events.sort(key=lambda e: e.get("report_date", ""))
+    earliest_manual_trade_date = min(manual_flow_by_date.keys()) if manual_flow_by_date else "99999999"
+    # Augment equity curve with manual positions
+    if manual_cost > 0 or manual_mv > 0:
+        for row in equity_curve:
+            row_date = str(row.get("report_date", "") or "")
+            row_eq = float(row.get("equity", 0) or 0)
+            if row_eq <= 0:
+                continue
+            if row_date == str(report_date):
+                row["equity"] = row_eq + manual_mv
+            elif row_date >= earliest_manual_trade_date:
+                row["equity"] = row_eq + manual_cost
+    display_equity_curve = [
+        {
+            **row,
+            "equity": _convert_money(row.get("equity"), fx_rate),
+            "cash": _convert_money(row.get("cash"), fx_rate),
+            "market_value": _convert_money(row.get("market_value"), fx_rate),
+        }
+        for row in equity_curve
+    ]
     display_asset_flow_events = [
         {
             **event,
@@ -1596,7 +1675,7 @@ def get_overview() -> dict:
         if valuation_as_of_local
         else normalize_date_to_iso(report_date)
     )
-    display_equity = _convert_money(equity, fx_rate)
+    display_equity = _convert_money(total_equity_with_manual, fx_rate)
     display_cash = _convert_money(cash, fx_rate)
     display_market_value = _convert_money(market_value, fx_rate)
     display_daily_change = _convert_money(daily_change, fx_rate)

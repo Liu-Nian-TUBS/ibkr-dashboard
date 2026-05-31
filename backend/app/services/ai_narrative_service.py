@@ -699,13 +699,18 @@ class CustomOpenAICompatibleProvider(MiniMaxChatCompletionsProvider):
         response_format: bool,
         max_tokens: int,
     ) -> dict[str, Any]:
-        return _openai_compatible_chat_request_payload(
-            model=model,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            response_format=response_format,
-            max_tokens=max_tokens,
-        )
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.1,
+            "max_completion_tokens": max_tokens,
+        }
+        if response_format:
+            payload["response_format"] = {"type": "json_object"}
+        return payload
 
     def _raise_response_error(self, payload: dict[str, Any]) -> None:
         return None

@@ -15,6 +15,7 @@ from app.services.quote_service import fetch_longbridge_candles
 from app.services.quote_service import fetch_longbridge_valuation_rank
 from app.services.quote_service import fetch_nasdaq_candles
 from app.services.quote_service import fetch_yahoo_candles
+from app.services.quote_service import fetch_sina_candles
 from app.services.account_currency import resolve_account_base_currency as _resolve_account_base_currency
 from app.services.settings_service import SettingsService
 from app.utils.dates import compact_date as _compact_date
@@ -215,6 +216,22 @@ def _list_current_positions(symbol: str | None = None) -> list[dict]:
     if _raw_repository is None:
         return []
     scoped_rows = _get_current_position_snapshot_rows()
+    # Also include manual-source position snapshots from other accounts
+    manual_rows = _raw_repository.es.search(
+        index="ibkr_position_snapshots_v1",
+        size=10000,
+        term_filters={"source": "manual"},
+    )
+    existing_ids = {id(r) for r in scoped_rows}
+    existing_symbols = {
+        (str(r.get("symbol", "")).upper(), str(r.get("account_id", "")))
+        for r in scoped_rows
+    }
+    for mr in manual_rows:
+        key = (str(mr.get("symbol", "")).upper(), str(mr.get("account_id", "")))
+        if key not in existing_symbols:
+            scoped_rows.append(mr)
+            existing_symbols.add(key)
     current_rows = _select_current_position_rows(scoped_rows)
     current_rows = _decorate_position_metrics(current_rows)
     if symbol:
@@ -356,9 +373,28 @@ def _decorate_position_metrics(items: list[dict]) -> list[dict]:
         quantity = _to_float(row.get("quantity", row.get("position")))
         cost_basis = _to_float(row.get("cost_basis_money"))
         average_cost = _to_float(row.get("average_cost_price", row.get("cost_basis_price")))
+        # Fallback: if cost_basis is 0, compute from trades
+        if cost_basis == 0 and quantity:
+            avg_from_trades = _compute_avg_cost_from_trades(
+                symbol=symbol, quantity=quantity,
+                account_id=account_id, report_date=report_date,
+            )
+            if avg_from_trades > 0:
+                cost_basis = avg_from_trades * abs(quantity)
+                average_cost = avg_from_trades
+                row["cost_basis_money"] = round(cost_basis, 2)
         if average_cost == 0 and quantity:
             average_cost = cost_basis / quantity
+        # Compute unrealized PnL from market value and cost basis
+        market_value = _to_float(row.get("market_value_snapshot"))
+        unrealized_pnl = _to_float(row.get("unrealized_pnl_snapshot"))
+        if unrealized_pnl == 0 and cost_basis > 0 and market_value:
+            unrealized_pnl = market_value - cost_basis
+            row["unrealized_pnl_snapshot"] = round(unrealized_pnl, 2)
         realized_pnl = realized_by_symbol.get(symbol, 0.0)
+        # Also compute realized PnL from trades if zero
+        if realized_pnl == 0:
+            realized_pnl = _compute_realized_pnl_from_trades(symbol, account_id, report_date)
         adjusted_cost_basis = cost_basis - realized_pnl
         row["average_cost_price"] = round(average_cost, 6)
         row["cost_price_moving_weighted"] = round(average_cost, 6)
@@ -370,6 +406,78 @@ def _decorate_position_metrics(items: list[dict]) -> list[dict]:
             row["previous_mark_price_snapshot"] = previous_price
         decorated.append(row)
     return decorated
+
+
+def _compute_realized_pnl_from_trades(symbol: str, account_id: str, report_date: str) -> float:
+    """Compute realized PnL from SELL trades: sum of (sell_price - avg_buy_price) * sell_qty."""
+    if _raw_repository is None or not symbol:
+        return 0.0
+    filters = {"symbol": symbol}
+    if account_id:
+        filters["account_id"] = account_id
+    trades = _raw_repository.es.search(
+        index="ibkr_trade_records_v1",
+        size=10000,
+        term_filters=filters,
+    )
+    report_key = _compact_date(report_date)
+    # First pass: compute avg buy price
+    total_buy_cost = 0.0
+    total_buy_qty = 0.0
+    # Second pass: compute realized from sells
+    realized = 0.0
+    sell_trades = []
+    for trade in trades:
+        trade_key = _compact_date(trade.get("trade_date"))
+        if report_key and trade_key and trade_key > report_key:
+            continue
+        side = str(trade.get("side", "") or trade.get("buy_sell", "") or "").upper()
+        qty = abs(_to_float(trade.get("quantity")))
+        price = _to_float(trade.get("trade_price"))
+        if side == "BUY" and qty > 0 and price > 0:
+            total_buy_cost += qty * price
+            total_buy_qty += qty
+        elif side == "SELL" and qty > 0 and price > 0:
+            sell_trades.append((qty, price))
+    if total_buy_qty <= 0:
+        return 0.0
+    avg_buy = total_buy_cost / total_buy_qty
+    for sell_qty, sell_price in sell_trades:
+        realized += (sell_price - avg_buy) * sell_qty
+    return realized
+
+
+def _compute_avg_cost_from_trades(symbol: str, quantity: float, account_id: str, report_date: str) -> float:
+    """Fallback: compute weighted average cost from BUY trades when cost_basis_money is 0."""
+    if _raw_repository is None or not symbol:
+        return 0.0
+    filters = {"symbol": symbol}
+    if account_id:
+        filters["account_id"] = account_id
+    trades = _raw_repository.es.search(
+        index="ibkr_trade_records_v1",
+        size=10000,
+        term_filters=filters,
+    )
+    report_key = _compact_date(report_date)
+    total_cost = 0.0
+    total_qty = 0.0
+    for trade in trades:
+        # Only consider trades up to report_date
+        trade_key = _compact_date(trade.get("trade_date"))
+        if report_key and trade_key and trade_key > report_key:
+            continue
+        side = str(trade.get("side", "") or trade.get("buy_sell", "") or "").upper()
+        if side != "BUY":
+            continue
+        qty = abs(_to_float(trade.get("quantity")))
+        price = _to_float(trade.get("trade_price"))
+        if qty > 0 and price > 0:
+            total_cost += qty * price
+            total_qty += qty
+    if total_qty <= 0:
+        return 0.0
+    return total_cost / total_qty
 
 
 def _build_realized_pnl_by_symbol(*, account_id: str, report_date: str) -> dict[str, float]:
@@ -551,6 +659,8 @@ def _fetch_missing_symbol_price_history(
         candles = fetch_nasdaq_candles(symbol, start_date=start_date, end_date=end_date)
     if len(candles) < 2:
         candles = fetch_yahoo_candles(symbol, start_date=start_date, end_date=end_date)
+    if len(candles) < 2:
+        candles = fetch_sina_candles(symbol, start_date=start_date, end_date=end_date)
     valuation_by_date = fetch_longbridge_valuation_rank(
         symbol,
         start_date=start_date,
@@ -576,7 +686,7 @@ def _fetch_missing_symbol_price_history(
 
 def _fetch_futu_symbol_price_history(symbol: str, *, start_date: str, end_date: str) -> list[dict]:
     settings = _settings_service.get()
-    if settings.futu_connection_mode == "disabled":
+    if settings.futu_connection_mode != "local_opend":
         return []
     return fetch_futu_candles(
         symbol,
@@ -783,6 +893,21 @@ def _enrich_positions(items: list[dict], *, fx_rate: float) -> list[dict]:
             pos["is_realtime"] = False
             pos["quote_source"] = "snapshot"
         previous_price = _optional_float(pos.get("previous_mark_price_snapshot"))
+        if previous_price is None and pos.get("source") == "manual":
+            # Try to get previous close from sina history for manual positions
+            try:
+                from app.services.quote_service import fetch_sina_history
+                from datetime import date as _date, timedelta as _td
+                _today = _date.today()
+                _hist = fetch_sina_history(
+                    str(pos.get("symbol", "")),
+                    start_date=(_today - _td(days=10)).isoformat(),
+                    end_date=_today.isoformat(),
+                )
+                if len(_hist) >= 2:
+                    previous_price = float(_hist[-2].get("value", 0))
+            except Exception:
+                pass
         if previous_price is not None and previous_price != 0:
             daily_change = float(pos.get("realtime_price", 0) or 0) - previous_price
             pos["daily_change"] = round(daily_change, 6)

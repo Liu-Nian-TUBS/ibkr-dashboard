@@ -861,7 +861,8 @@ function calculateReturn(points: CurvePoint[], events: FlowEvent[], method: Retu
     }
     if (periods === 0) return { amount: null, rate: null };
     const rate = growth - 1;
-    return { amount: first.equity * rate, rate };
+    // Use actual gain (amount) instead of first.equity * rate which is wrong when first equity is small
+    return { amount, rate };
   }
   if (method === "cash") {
     const totalDays = Math.max(daysBetween(first.date, last.date), 1);

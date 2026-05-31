@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.api.response_models import STORAGE_UNAVAILABLE_OPENAPI_RESPONSE
 from app.repositories.raw_repository import RawRepository
+from app.services.quote_service import fetch_sina_quote
 
 router = APIRouter()
 _raw_repository: RawRepository | object | None = None
@@ -72,6 +73,7 @@ def create_manual_trade(payload: ManualTradeRequest) -> dict:
         "source": "manual",
     }
     _raw_repository.es.update(index="ibkr_trade_records_v1", id=trade_id, doc=doc, doc_as_upsert=True)
+    _sync_manual_position_snapshot(doc["symbol"], doc["account_id"])
     return {"status": "created", "trade_id": trade_id, "record": doc}
 
 
@@ -135,6 +137,11 @@ def update_manual_trade(trade_id: str, payload: ManualTradeUpdateRequest) -> dic
 
     doc = {**existing, **updates}
     _raw_repository.es.update(index="ibkr_trade_records_v1", id=trade_id, doc=doc, doc_as_upsert=True)
+    _sync_manual_position_snapshot(doc["symbol"], doc.get("account_id", "manual"))
+    # If symbol changed, also update old symbol
+    old_symbol = str(existing.get("symbol", "")).upper()
+    if old_symbol and old_symbol != doc["symbol"]:
+        _sync_manual_position_snapshot(old_symbol, existing.get("account_id", "manual"))
     return {"status": "updated", "trade_id": trade_id, "record": doc}
 
 
@@ -146,10 +153,74 @@ def delete_manual_trade(trade_id: str) -> dict:
     if not trade_id.startswith("manual:"):
         raise HTTPException(status_code=403, detail="only manual trades can be deleted")
 
-    try:
-        _raw_repository.es.get(index="ibkr_trade_records_v1", id=trade_id)
-    except (KeyError, RuntimeError):
-        raise HTTPException(status_code=404, detail="trade not found")
-
+    # Retrieve symbol before deletion
+    trade_doc = _raw_repository.es.get(index="ibkr_trade_records_v1", id=trade_id)
+    symbol = str(trade_doc.get("symbol", "")).upper()
+    account_id = str(trade_doc.get("account_id", "manual"))
     _raw_repository.es.delete(index="ibkr_trade_records_v1", id=trade_id)
+    if symbol:
+        _sync_manual_position_snapshot(symbol, account_id)
     return {"status": "deleted", "trade_id": trade_id}
+
+
+def _sync_manual_position_snapshot(symbol: str, account_id: str = "manual") -> None:
+    """Recalculate net position from all manual trades for a symbol and upsert position snapshot."""
+    if _raw_repository is None or not symbol:
+        return
+    trades = _raw_repository.es.search(
+        index="ibkr_trade_records_v1",
+        size=10000,
+        term_filters={"symbol": symbol.upper(), "source": "manual"},
+    )
+    net_quantity = 0.0
+    total_cost = 0.0
+    latest_date = ""
+    for t in trades:
+        side = str(t.get("side", t.get("buy_sell", ""))).upper()
+        qty = float(t.get("quantity", 0) or 0)
+        price = float(t.get("trade_price", 0) or 0)
+        td = str(t.get("trade_date", "") or "")
+        if side == "BUY":
+            total_cost += qty * price
+            net_quantity += qty
+        elif side == "SELL":
+            if net_quantity > 0:
+                avg = total_cost / net_quantity
+                total_cost -= qty * avg
+            net_quantity -= qty
+        if td > latest_date:
+            latest_date = td
+
+    snapshot_id = f"manual_{account_id}_{symbol.upper()}_SUMMARY"
+    report_date = latest_date.replace("-", "") if latest_date else date.today().strftime("%Y%m%d")
+
+    if net_quantity <= 0:
+        # No position left — remove snapshot
+        try:
+            _raw_repository.es.delete(index="ibkr_position_snapshots_v1", id=snapshot_id)
+        except Exception:
+            pass
+        return
+
+    avg_cost = total_cost / net_quantity if net_quantity else 0.0
+    # Try to get realtime price
+    realtime_price = fetch_sina_quote(symbol.upper())
+    mark_price = realtime_price if realtime_price and realtime_price > 0 else avg_cost
+    market_value = round(net_quantity * mark_price, 2)
+    unrealized_pnl = round(market_value - total_cost, 2)
+    doc = {
+        "account_id": account_id,
+        "symbol": symbol.upper(),
+        "quantity": round(net_quantity, 6),
+        "cost_basis_money": round(total_cost, 2),
+        "cost_basis_price": round(avg_cost, 6),
+        "average_cost_price": round(avg_cost, 6),
+        "mark_price_snapshot": round(mark_price, 6),
+        "market_value_snapshot": market_value,
+        "unrealized_pnl_snapshot": unrealized_pnl,
+        "report_date": report_date,
+        "level_of_detail": "SUMMARY",
+        "asset_category": "STK",
+        "source": "manual",
+    }
+    _raw_repository.es.update(index="ibkr_position_snapshots_v1", id=snapshot_id, doc=doc, doc_as_upsert=True)

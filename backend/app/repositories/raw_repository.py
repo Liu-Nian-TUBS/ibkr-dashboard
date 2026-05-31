@@ -23,12 +23,17 @@ class RawRepository:
     def get_latest_account_snapshot(self) -> dict[str, Any] | None:
         records = self.es.search(
             index="ibkr_account_snapshots_v1",
-            size=1,
+            size=10,
             sort_field="report_date",
             descending=True,
         )
         if not records:
             return None
+        # Prefer record with non-zero equity
+        for r in records:
+            equity = float(r.get("total_equity", 0) or 0)
+            if equity != 0:
+                return r
         return records[0]
 
     def list_positions(

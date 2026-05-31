@@ -85,7 +85,7 @@ from app.services.auto_reconciliation_service import AutoReconciliationService
 from app.services.industry_mapping_service import IndustryMappingService
 from app.services.daily_performance_service import DailyPerformanceService
 from app.services.flex_client import FlexStatementClient
-from app.services.quote_service import QuoteService, fetch_benchmark_history, fetch_finnhub_quote, fetch_longbridge_quote, fetch_yahoo_quote
+from app.services.quote_service import QuoteService, fetch_benchmark_history, fetch_finnhub_quote, fetch_longbridge_quote, fetch_yahoo_quote, fetch_sina_quote
 from app.services.ingestion_service import IngestionService
 from app.services.market_data_provider import build_market_data_provider
 from app.services.manual_backfill_service import ManualBackfillService
@@ -206,11 +206,16 @@ set_auto_reconciliation_service(auto_reconciliation_service)
 
 def _build_quote_service() -> QuoteService:
     def primary(symbol: str) -> float | None:
-        return fetch_longbridge_quote(symbol)
+        mode = settings_service.get().futu_connection_mode
+        if mode == "sina":
+            return fetch_sina_quote(symbol)
+        if mode == "longbridge":
+            return fetch_longbridge_quote(symbol)
+        return None
 
     def secondary(symbol: str) -> float | None:
         api_key = settings_service.get().finnhub_api_key
-        return fetch_finnhub_quote(symbol, api_key=api_key) or fetch_yahoo_quote(symbol)
+        return fetch_finnhub_quote(symbol, api_key=api_key) or fetch_yahoo_quote(symbol) or fetch_sina_quote(symbol)
 
     def snapshot(symbol: str) -> float:
         positions = raw_repository.list_positions(symbol=symbol, page=1, page_size=1)

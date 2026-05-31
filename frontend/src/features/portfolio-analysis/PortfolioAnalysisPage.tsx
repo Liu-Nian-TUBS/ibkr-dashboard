@@ -644,8 +644,7 @@ function AnalysisMeta({ meta }: { meta: ApiRecord }) {
         {sourceLabel(recordText(meta, "source", "portfolio_positions"))}
         {" · "}
         置信度 {Math.round((recordNumber(meta, "confidence") ?? 0) * 100)}%
-        {recordBool(meta, "external_ready") ? " · 已接入外部研究信号" : " · 外部研究信号不足"}
-        {missing.length ? ` · 缺口：${missing.slice(0, 2).join("、")}` : ""}
+        {recordBool(meta, "external_ready") && " · 已接入外部研究信号"}
       </span>
     </div>
   );

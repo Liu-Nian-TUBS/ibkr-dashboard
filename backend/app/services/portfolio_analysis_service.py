@@ -317,7 +317,7 @@ class PortfolioAnalysisService:
     def _market_sentiments(self, watch_symbols: list[str]) -> dict[str, Any]:
         provider_name = str(getattr(self._market_data_provider, "name", "") or "")
         bundle: dict[str, Any] = {
-            "cnn_fear_greed": fetch_cnn_fear_greed() if provider_name in {"longbridge", "futu_opend", "quote_fallback"} else {},
+            "cnn_fear_greed": fetch_cnn_fear_greed() if provider_name in {"longbridge", "futu_opend", "quote_fallback", "sina"} else {},
             "longbridge_market_temp": {},
             "longbridge_topics": [],
             "futu_market_heat": {},
@@ -340,7 +340,7 @@ class PortfolioAnalysisService:
 
     def _futu_sentiments(self, watch_symbols: list[str]) -> dict[str, Any]:
         settings = self._settings_service.get()
-        if settings.futu_connection_mode == "disabled":
+        if settings.futu_connection_mode != "local_opend":
             return {}
         provider = build_futu_opend_provider(settings)
         try:

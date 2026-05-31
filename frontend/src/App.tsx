@@ -38,7 +38,7 @@ const PAGE_RENDERERS: Record<PageKey, (navigate: (page: PageKey) => void) => JSX
 
 function App() {
   const [activePage, setActivePage] = useState<PageKey>("overview");
-  const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [sidebarVisible, setSidebarVisible] = useState(window.innerWidth > 1180);
   const activeItem = useMemo(() => NAV_ITEMS.find((item) => item.key === activePage) ?? NAV_ITEMS[0], [activePage]);
   const renderPage = PAGE_RENDERERS[activePage];
 

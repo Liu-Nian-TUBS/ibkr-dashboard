@@ -1016,13 +1016,20 @@ def refresh_longbridge_history_cache(
     results: list[dict[str, object]] = []
     for symbol in _dedupe_symbols(symbols):
         points = fetch_longbridge_history(symbol, start_date=start_date, end_date=end_date)
+        source = "longbridge"
+        if not points:
+            points = fetch_yahoo_history(symbol, start_date=start_date, end_date=end_date)
+            source = "yahoo"
+        if not points:
+            points = fetch_sina_history(symbol, start_date=start_date, end_date=end_date)
+            source = "sina"
         if points:
             cache.store_range(symbol, start_date, end_date, points)
         results.append(
             {
                 "symbol": symbol,
                 "points": len(points),
-                "source": "longbridge" if points else "unavailable",
+                "source": source if points else "unavailable",
             }
         )
     _clear_market_history_memory_cache()
@@ -1080,6 +1087,12 @@ def _fetch_benchmark_history_uncached(
             end_date=end_date,
             client=client,
         )
+    if len(points) < minimum_points:
+        points = fetch_sina_history(
+            symbol,
+            start_date=start_date,
+            end_date=end_date,
+        )
     return points
 
 
@@ -1113,3 +1126,194 @@ def _dedupe_symbols(symbols: list[str]) -> list[str]:
 
 def _clear_market_history_memory_cache() -> None:
     _history_cache.clear()
+
+
+# ---------------------------------------------------------------------------
+# Sina Finance (新浪美股) helpers
+# ---------------------------------------------------------------------------
+
+_SINA_INDEX_MAP = {
+    "^GSPC": ".inx",
+    "^IXIC": ".ixic",
+    "^NDX": ".ndx",
+    "^VIX": "vixy",
+    "^DJI": ".dji",
+}
+
+_SINA_HEADERS = {
+    "Referer": "https://finance.sina.com.cn",
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+}
+
+
+def _sina_symbol(symbol: str) -> str:
+    """Convert a standard symbol to Sina's gb_ code."""
+    upper = symbol.upper().replace(".US", "")
+    if upper in _SINA_INDEX_MAP:
+        return _SINA_INDEX_MAP[upper]
+    return upper.lower()
+
+
+def fetch_sina_quote(symbol: str, *, client: httpx.Client | None = None) -> float | None:
+    """Fetch realtime quote from Sina Finance."""
+    sina_sym = _sina_symbol(symbol)
+    url = f"https://hq.sinajs.cn/list=gb_{sina_sym}"
+    owns_client = client is None
+    client = client or httpx.Client(timeout=5.0)
+    try:
+        response = client.get(url, headers=_SINA_HEADERS)
+        if response.status_code >= 400:
+            return None
+        text = response.text
+        # Format: var hq_str_gb_xxx="name,price,change,...";
+        start = text.find('"')
+        end = text.rfind('"')
+        if start < 0 or end <= start:
+            return None
+        fields_str = text[start + 1:end]
+        if not fields_str:
+            return None
+        parts = fields_str.split(",")
+        if len(parts) < 2:
+            return None
+        try:
+            price = float(parts[1])
+            return price if price > 0 else None
+        except (ValueError, IndexError):
+            return None
+    except Exception:
+        return None
+    finally:
+        if owns_client:
+            client.close()
+
+
+def fetch_sina_history(
+    symbol: str,
+    *,
+    start_date: str,
+    end_date: str,
+    client: httpx.Client | None = None,
+) -> list[dict]:
+    """Fetch daily K-line history from Sina Finance US stock API."""
+    import re
+
+    start = _parse_iso_date(start_date)
+    end = _parse_iso_date(end_date)
+    if start is None or end is None or start > end:
+        return []
+
+    sina_sym = _sina_symbol(symbol)
+    days_needed = (end - start).days + 30
+    url = (
+        f"https://stock.finance.sina.com.cn/usstock/api/jsonp.php/var/"
+        f"US_MinKService.getDailyK?symbol={sina_sym}&range={days_needed}"
+    )
+    owns_client = client is None
+    client = client or httpx.Client(timeout=10.0)
+    try:
+        response = client.get(url, headers=_SINA_HEADERS)
+        if response.status_code >= 400:
+            return []
+        text = response.text
+        # JSONP: var([ ... ])
+        match = re.search(r"\((.*)\)", text, re.DOTALL)
+        if not match:
+            return []
+        try:
+            data = json.loads(match.group(1))
+        except (json.JSONDecodeError, ValueError):
+            return []
+        if not isinstance(data, list):
+            return []
+        points: list[dict] = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            point_date = _parse_iso_date(str(item.get("d", "")))
+            if point_date is None or point_date < start or point_date > end:
+                continue
+            try:
+                close = float(item.get("c", 0))
+            except (TypeError, ValueError):
+                continue
+            if close <= 0:
+                continue
+            volume = None
+            try:
+                v = item.get("v")
+                if v is not None:
+                    volume = int(float(v))
+            except (TypeError, ValueError):
+                pass
+            open_price = None
+            try:
+                o = item.get("o")
+                if o is not None:
+                    open_price = round(float(o), 4)
+            except (TypeError, ValueError):
+                pass
+            high_price = None
+            try:
+                h = item.get("h")
+                if h is not None:
+                    high_price = round(float(h), 4)
+            except (TypeError, ValueError):
+                pass
+            low_price = None
+            try:
+                l_val = item.get("l")
+                if l_val is not None:
+                    low_price = round(float(l_val), 4)
+            except (TypeError, ValueError):
+                pass
+            points.append(
+                {
+                    "date": point_date.isoformat(),
+                    "value": round(close, 4),
+                    "open": open_price,
+                    "high": high_price,
+                    "low": low_price,
+                    "volume": volume,
+                    "source": "sina",
+                }
+            )
+        points.sort(key=lambda p: str(p.get("date", "")))
+        return points
+    except Exception:
+        return []
+    finally:
+        if owns_client:
+            client.close()
+
+
+def fetch_sina_candles(
+    symbol: str,
+    *,
+    start_date: str,
+    end_date: str,
+) -> list[dict]:
+    """Adapter: convert fetch_sina_history output to candle format for position detail."""
+    rows = fetch_sina_history(symbol, start_date=start_date, end_date=end_date)
+    candles: list[dict] = []
+    for row in rows:
+        candle: dict = {
+            "date": row.get("date", ""),
+            "date_iso": row.get("date", ""),
+            "close": row.get("value"),
+            "source": "sina",
+        }
+        if row.get("open") is not None:
+            candle["open"] = row["open"]
+        if row.get("high") is not None:
+            candle["high"] = row["high"]
+        if row.get("low") is not None:
+            candle["low"] = row["low"]
+        if row.get("volume") is not None:
+            candle["volume"] = row["volume"]
+        candles.append(candle)
+    return candles

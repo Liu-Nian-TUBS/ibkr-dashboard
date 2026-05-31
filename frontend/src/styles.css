@@ -4794,6 +4794,14 @@ input[type="file"] {
     transform: none;
   }
 
+  .app-shell--sidebar-hidden .sidebar .nav-list {
+    display: none;
+  }
+
+  .app-shell--sidebar-hidden .sidebar .brand-lockup {
+    display: none;
+  }
+
   .brand-lockup {
     padding: 0;
     min-width: 0;
