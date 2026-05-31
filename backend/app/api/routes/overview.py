@@ -1863,6 +1863,10 @@ def get_overview() -> dict:
     ]
     # Strip zero-equity entries (account inactive/empty report days)
     display_equity_curve = [row for row in display_equity_curve if abs(float(row.get("equity", 0) or 0)) >= 0.01]
+    # Override last curve point's total_pnl with the precise API-level value (uses realtime prices)
+    if display_equity_curve:
+        _last_curve = display_equity_curve[-1]
+        _last_curve["total_pnl"] = _convert_money(total_pnl, fx_rate)
     display_asset_flow_events = [
         {
             **event,
