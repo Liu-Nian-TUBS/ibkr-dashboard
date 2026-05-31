@@ -440,7 +440,36 @@ def _compute_realized_pnl_until_report_date(
             trade_realized += _to_float(row.get("fifo_pnl_realized"))
             has_trade_realized = True
     if has_trade_realized:
+        # Also add manual trades' realized PnL up to report_date
+        manual_trades = raw_repository.es.search(
+            index="ibkr_trade_records_v1",
+            size=10000,
+            term_filters={"source": "manual"},
+        )
+        for mrow in manual_trades:
+            mtd = _normalize_trade_date(mrow.get("trade_date", mrow.get("report_date", "")))
+            if not mtd or mtd > str(report_date):
+                continue
+            if "fifo_pnl_realized" in mrow:
+                trade_realized += _to_float(mrow.get("fifo_pnl_realized"))
         return round(trade_realized, 2)
+    # Even if no IBKR realized, check manual trades
+    manual_trades = raw_repository.es.search(
+        index="ibkr_trade_records_v1",
+        size=10000,
+        term_filters={"source": "manual"},
+    )
+    manual_realized = 0.0
+    has_manual = False
+    for mrow in manual_trades:
+        mtd = _normalize_trade_date(mrow.get("trade_date", mrow.get("report_date", "")))
+        if not mtd or mtd > str(report_date):
+            continue
+        if "fifo_pnl_realized" in mrow:
+            manual_realized += _to_float(mrow.get("fifo_pnl_realized"))
+            has_manual = True
+    if has_manual:
+        return round(manual_realized, 2)
     return None
 
 
@@ -1654,16 +1683,6 @@ def get_overview() -> dict:
     )
     if realized_pnl_until_report_date is not None:
         realized_pnl = realized_pnl_until_report_date
-        # Add manual trades' realized PnL
-        if _raw_repository is not None:
-            _manual_rpnl_trades = _raw_repository.es.search(
-                index="ibkr_trade_records_v1",
-                size=10000,
-                term_filters={"source": "manual"},
-            )
-            for _mrt in _manual_rpnl_trades:
-                realized_pnl += float(_mrt.get("fifo_pnl_realized", 0) or 0)
-            realized_pnl = round(realized_pnl, 2)
         total_pnl = round(realized_pnl + unrealized_pnl, 2)
     if ytd_commissions is None or abs(ytd_commissions) < 1e-9:
         fallback_commissions = _compute_ytd_commissions_from_trades(
