@@ -1846,6 +1846,17 @@ def get_overview() -> dict:
         benchmark_series=benchmark_series,
     )
     previous_report_date = str(previous_snapshot.get("report_date", "") or "") if previous_snapshot else ""
+    # Compute previous manual MV for the previous report_date
+    previous_manual_mv = 0.0
+    if previous_report_date:
+        _prev_manual_positions = _raw_repository.es.search(
+            index="ibkr_position_snapshots_v1",
+            size=10000,
+            term_filters={"source": "manual", "report_date": previous_report_date},
+        )
+        previous_manual_mv = sum(float(p.get("market_value_snapshot", 0) or 0) for p in _prev_manual_positions)
+    previous_equity_with_manual = (float(previous_snapshot.get("total_equity", 0) or 0) + previous_manual_mv) if previous_snapshot else None
+    previous_market_value_with_manual = (float(previous_snapshot.get("stock_market_value", 0) or 0) + previous_manual_mv) if previous_snapshot else None
     previous_unrealized_pnl = (
         _to_float(previous_snapshot.get("unrealized_pnl"))
         if previous_snapshot and previous_snapshot.get("unrealized_pnl") is not None
@@ -1874,8 +1885,8 @@ def get_overview() -> dict:
             "cash": display_cash,
         },
         previous={
-            "equity": _convert_money(previous_snapshot.get("total_equity"), fx_rate) if previous_snapshot else None,
-            "market_value": _convert_money(previous_snapshot.get("stock_market_value"), fx_rate) if previous_snapshot else None,
+            "equity": _convert_money(previous_equity_with_manual, fx_rate) if previous_equity_with_manual is not None else None,
+            "market_value": _convert_money(previous_market_value_with_manual, fx_rate) if previous_market_value_with_manual is not None else None,
             "unrealized_pnl": _convert_money(previous_unrealized_pnl, fx_rate) if previous_unrealized_pnl is not None else None,
             "realized_pnl": _convert_money(previous_realized_pnl, fx_rate) if previous_realized_pnl is not None else None,
             "cash": _convert_money(previous_snapshot.get("cash"), fx_rate) if previous_snapshot else None,
