@@ -600,14 +600,30 @@ def _build_pnl_calendar(
     non_zero_unrealized = sum(1 for v in unrealized_total_by_date.values() if abs(v) > 1e-6)
     use_market_value_delta = non_zero_unrealized <= 1 and len(market_value_by_date) > 1
 
+    # Build daily net trade cost (buy increases position cost, sell decreases)
+    # This represents capital deployed/withdrawn, NOT profit
+    trade_cost_daily: dict[str, float] = {}
+    for trade in trades:
+        trade_date = _compact_date(trade.get("trade_date"))
+        if not trade_date:
+            continue
+        quantity = float(trade.get("quantity", 0) or 0)
+        price = float(trade.get("trade_price", 0) or 0)
+        side = str(trade.get("buy_sell", trade.get("side", "")) or "").upper()
+        if side == "BUY":
+            trade_cost_daily[trade_date] = trade_cost_daily.get(trade_date, 0.0) + quantity * price
+        elif side == "SELL":
+            trade_cost_daily[trade_date] = trade_cost_daily.get(trade_date, 0.0) - quantity * price
+
     unrealized_daily_map: dict[str, float] = {}
     if use_market_value_delta:
         previous_mv: float | None = None
         for report_date in sorted(market_value_by_date):
             current_mv = market_value_by_date[report_date]
-            # Compute daily MV change, subtracting any realized trades on that day (already counted separately)
+            # Daily PnL = MV change - net capital deployed - realized (counted separately)
             day_realized = realized_daily_map.get(report_date, 0.0)
-            delta = 0.0 if previous_mv is None else current_mv - previous_mv - day_realized
+            day_trade_cost = trade_cost_daily.get(report_date, 0.0)
+            delta = 0.0 if previous_mv is None else current_mv - previous_mv - day_trade_cost - day_realized
             previous_mv = current_mv
             if start_date and report_date < start_date:
                 continue
