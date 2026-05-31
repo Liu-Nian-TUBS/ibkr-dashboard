@@ -332,20 +332,47 @@ def _select_current_position_rows(rows: list[dict]) -> list[dict]:
         if str(row.get("level_of_detail", "") or "").upper() == "SUMMARY"
     ]
     if summary_rows:
-        by_key: dict[tuple[str, str], dict] = {}
+        # Merge same symbol across accounts
+        by_symbol: dict[str, dict] = {}
         for row in sorted(
             summary_rows,
             key=lambda item: _compact_date(item.get("report_date")),
             reverse=True,
         ):
             symbol = str(row.get("symbol", "") or "").upper()
-            acct = str(row.get("account_id", "") or "")
-            key = (symbol, acct)
-            if not symbol or key in by_key:
+            if not symbol:
                 continue
             row["symbol"] = symbol
-            by_key[key] = row
-        return list(by_key.values())
+            if symbol not in by_symbol:
+                by_symbol[symbol] = row
+            else:
+                # Merge into existing
+                existing = by_symbol[symbol]
+                existing["quantity"] = str(
+                    float(existing.get("quantity", 0) or 0) + float(row.get("quantity", 0) or 0)
+                )
+                existing["market_value_snapshot"] = (
+                    float(existing.get("market_value_snapshot", 0) or 0)
+                    + float(row.get("market_value_snapshot", 0) or 0)
+                )
+                existing["cost_basis_money"] = (
+                    float(existing.get("cost_basis_money", 0) or 0)
+                    + float(row.get("cost_basis_money", 0) or 0)
+                )
+                existing["unrealized_pnl_snapshot"] = (
+                    float(existing.get("unrealized_pnl_snapshot", 0) or 0)
+                    + float(row.get("unrealized_pnl_snapshot", 0) or 0)
+                )
+        # Recalculate derived fields for merged rows
+        for row in by_symbol.values():
+            qty = float(row.get("quantity", 0) or 0)
+            cost = float(row.get("cost_basis_money", 0) or 0)
+            mv = float(row.get("market_value_snapshot", 0) or 0)
+            row["average_cost_price"] = round(cost / qty, 2) if qty else 0
+            row["mark_price_snapshot"] = round(mv / qty, 2) if qty else 0
+            row["cost_price_adjusted"] = row["average_cost_price"]
+            row["cost_basis_adjusted"] = cost
+        return list(by_symbol.values())
 
     aggregated: dict[str, dict] = {}
     for row in rows:
