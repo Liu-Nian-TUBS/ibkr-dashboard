@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.api.response_models import STORAGE_UNAVAILABLE_OPENAPI_RESPONSE
 from app.repositories.raw_repository import RawRepository
-from app.services.quote_service import fetch_sina_quote
+from app.services.quote_service import fetch_sina_quote, fetch_sina_history
 
 router = APIRouter()
 _raw_repository: RawRepository | object | None = None
@@ -74,6 +74,11 @@ def create_manual_trade(payload: ManualTradeRequest) -> dict:
     }
     _raw_repository.es.update(index="ibkr_trade_records_v1", id=trade_id, doc=doc, doc_as_upsert=True)
     _sync_manual_position_snapshot(doc["symbol"], doc["account_id"])
+    # Trigger history backfill if needed
+    try:
+        _backfill_manual_history(doc["symbol"], doc["account_id"])
+    except Exception:
+        pass
     return {"status": "created", "trade_id": trade_id, "record": doc}
 
 
@@ -226,3 +231,129 @@ def _sync_manual_position_snapshot(symbol: str, account_id: str = "manual") -> N
         "source": "manual",
     }
     _raw_repository.es.update(index="ibkr_position_snapshots_v1", id=snapshot_id, doc=doc, doc_as_upsert=True)
+
+
+def _backfill_manual_history(symbol: str, account_id: str = "manual") -> dict:
+    """Backfill historical daily snapshots for a manual position using Sina K-line data."""
+    if _raw_repository is None or not symbol:
+        return {"status": "skipped", "reason": "no repository or symbol"}
+
+    symbol = symbol.upper()
+    trades = _raw_repository.es.search(
+        index="ibkr_trade_records_v1",
+        size=10000,
+        term_filters={"symbol": symbol, "source": "manual", "account_id": account_id},
+    )
+    if not trades:
+        return {"status": "skipped", "reason": "no trades"}
+
+    # Find earliest trade date
+    trade_dates = [t.get("trade_date", "") for t in trades if t.get("trade_date")]
+    if not trade_dates:
+        return {"status": "skipped", "reason": "no trade dates"}
+    earliest = min(trade_dates)
+    today_str = date.today().isoformat()
+
+    # Fetch history
+    history = fetch_sina_history(symbol, start_date=earliest, end_date=today_str)
+    if not history:
+        return {"status": "skipped", "reason": "no history data"}
+
+    # Sort trades by date for incremental calculation
+    trades.sort(key=lambda t: t.get("trade_date", ""))
+
+    # Build price map
+    price_map = {h["date"]: h["value"] for h in history if "date" in h and "value" in h}
+
+    created = 0
+    skipped = 0
+    for hist_date_str, close_price in price_map.items():
+        # Skip weekends already handled by Sina (only returns trading days)
+        date_tag = hist_date_str.replace("-", "")
+        snap_id = f"manual_{account_id}_{symbol}_{date_tag}_SUMMARY"
+
+        # Check if exists
+        try:
+            existing = _raw_repository.es.get(index="ibkr_position_snapshots_v1", id=snap_id)
+            if existing:
+                skipped += 1
+                continue
+        except Exception:
+            pass
+
+        # Calculate position as of this date
+        net_quantity = 0.0
+        total_cost = 0.0
+        for t in trades:
+            td = t.get("trade_date", "")
+            if td > hist_date_str:
+                break
+            side = str(t.get("side", "")).upper()
+            qty = float(t.get("quantity", 0) or 0)
+            price = float(t.get("trade_price", 0) or 0)
+            if side == "BUY":
+                total_cost += qty * price
+                net_quantity += qty
+            elif side == "SELL":
+                if net_quantity > 0:
+                    avg = total_cost / net_quantity
+                    total_cost -= qty * avg
+                net_quantity -= qty
+
+        if net_quantity <= 0:
+            continue
+
+        avg_cost = total_cost / net_quantity if net_quantity else 0.0
+        market_value = round(net_quantity * close_price, 2)
+        unrealized_pnl = round(market_value - total_cost, 2)
+
+        doc = {
+            "account_id": account_id,
+            "symbol": symbol,
+            "quantity": round(net_quantity, 6),
+            "cost_basis_money": round(total_cost, 2),
+            "cost_basis_price": round(avg_cost, 6),
+            "average_cost_price": round(avg_cost, 6),
+            "mark_price_snapshot": round(close_price, 6),
+            "market_value_snapshot": market_value,
+            "unrealized_pnl_snapshot": unrealized_pnl,
+            "report_date": date_tag,
+            "level_of_detail": "SUMMARY",
+            "asset_category": "STK",
+            "source": "manual",
+        }
+        _raw_repository.es.update(index="ibkr_position_snapshots_v1", id=snap_id, doc=doc, doc_as_upsert=True)
+        created += 1
+
+    return {"status": "done", "symbol": symbol, "created": created, "skipped": skipped}
+
+
+@router.post("/api/manual-trades/backfill-history", responses=STORAGE_UNAVAILABLE_OPENAPI_RESPONSE)
+def backfill_all_manual_history() -> dict:
+    """Trigger historical snapshot backfill for all manual positions."""
+    if _raw_repository is None:
+        raise HTTPException(status_code=503, detail="storage_unavailable")
+
+    # Find all distinct manual symbols
+    trades = _raw_repository.es.search(
+        index="ibkr_trade_records_v1",
+        size=10000,
+        term_filters={"source": "manual"},
+    )
+    # Group by (symbol, account_id)
+    pairs = set()
+    for t in trades:
+        sym = str(t.get("symbol", "")).upper()
+        acc = str(t.get("account_id", "manual"))
+        if sym:
+            pairs.add((sym, acc))
+
+    results = []
+    for sym, acc in pairs:
+        try:
+            r = _backfill_manual_history(sym, acc)
+            results.append(r)
+        except Exception as e:
+            results.append({"symbol": sym, "status": "error", "error": str(e)})
+
+    return {"status": "done", "results": results}

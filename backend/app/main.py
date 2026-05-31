@@ -64,6 +64,7 @@ from app.api.routes.trades import set_raw_repository as set_trades_raw_repositor
 from app.api.routes.trades import set_settings_service as set_trades_settings_service
 from app.api.routes.manual_trades import router as manual_trades_router
 from app.api.routes.manual_trades import set_raw_repository as set_manual_trades_raw_repository
+from app.api.routes.manual_trades import _sync_manual_position_snapshot as sync_manual_snapshot
 from app.core.config import load_settings
 from app.core.config import validate_settings
 from app.core.errors import register_error_handlers
@@ -395,7 +396,61 @@ def run_startup_auto_backfill(
     return executed_dates
 
 
-daily_sync_scheduler = DailySyncScheduler(run_job=execute_scheduled_daily_sync)
+def execute_manual_positions_daily_sync() -> None:
+    """Daily sync for manual positions - runs at UTC 20:30 (after US market close)."""
+    try:
+        now_utc = datetime.now(timezone.utc)
+        # Only run on weekdays between UTC 20:30-21:30
+        if now_utc.weekday() >= 5:  # Saturday=5, Sunday=6
+            return
+        if not (20 <= now_utc.hour <= 21):
+            return
+        if now_utc.hour == 20 and now_utc.minute < 30:
+            return
+        if now_utc.hour == 21 and now_utc.minute > 30:
+            return
+
+        # Check if already ran today
+        today_tag = now_utc.strftime("%Y%m%d")
+        if getattr(execute_manual_positions_daily_sync, '_last_run', None) == today_tag:
+            return
+
+        trades = raw_repository.es.search(
+            index="ibkr_trade_records_v1",
+            size=10000,
+            term_filters={"source": "manual"},
+        )
+        pairs = set()
+        for t in trades:
+            sym = str(t.get("symbol", "")).upper()
+            acc = str(t.get("account_id", "manual"))
+            if sym:
+                pairs.add((sym, acc))
+
+        for sym, acc in pairs:
+            try:
+                sync_manual_snapshot(sym, acc)
+            except Exception:
+                pass
+
+        execute_manual_positions_daily_sync._last_run = today_tag
+        logger.info(
+            json.dumps({"event": "manual_positions_daily_sync_done", "count": len(pairs)}),
+            extra={"trace_id": "scheduler"},
+        )
+    except Exception as exc:
+        logger.error(
+            json.dumps({"event": "manual_positions_daily_sync_failed", "error": str(exc)}),
+            extra={"trace_id": "scheduler"},
+        )
+
+
+def _combined_scheduled_sync() -> None:
+    execute_scheduled_daily_sync()
+    execute_manual_positions_daily_sync()
+
+
+daily_sync_scheduler = DailySyncScheduler(run_job=_combined_scheduled_sync)
 telegram_report_scheduler = DailyTimeScheduler(
     run_job=execute_scheduled_telegram_report,
     job_id="telegram_daily_report",
