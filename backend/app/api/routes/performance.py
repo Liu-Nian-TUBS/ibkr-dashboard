@@ -578,6 +578,7 @@ def _build_pnl_calendar(
         positions_by_date.setdefault(report_date, []).append(position)
 
     unrealized_total_by_date: dict[str, float] = {}
+    market_value_by_date: dict[str, float] = {}
     for report_date, rows in positions_by_date.items():
         summary_rows = [
             row
@@ -589,16 +590,37 @@ def _build_pnl_calendar(
             _to_float(row.get("unrealized_pnl_snapshot", row.get("fifo_pnl_unrealized")))
             for row in selected_rows
         )
+        market_value_by_date[report_date] = sum(
+            _to_float(row.get("market_value_snapshot", row.get("position_value")))
+            for row in selected_rows
+        )
+
+    # Decide whether to use unrealized_pnl or market_value delta
+    # If most dates have unrealized=0 but market_value varies, use market_value delta
+    non_zero_unrealized = sum(1 for v in unrealized_total_by_date.values() if abs(v) > 1e-6)
+    use_market_value_delta = non_zero_unrealized <= 1 and len(market_value_by_date) > 1
 
     unrealized_daily_map: dict[str, float] = {}
-    previous_unrealized: float | None = None
-    for report_date in sorted(unrealized_total_by_date):
-        current_unrealized = unrealized_total_by_date[report_date]
-        delta = 0.0 if previous_unrealized is None else current_unrealized - previous_unrealized
-        previous_unrealized = current_unrealized
-        if start_date and report_date < start_date:
-            continue
-        unrealized_daily_map[report_date] = delta
+    if use_market_value_delta:
+        previous_mv: float | None = None
+        for report_date in sorted(market_value_by_date):
+            current_mv = market_value_by_date[report_date]
+            # Compute daily MV change, subtracting any realized trades on that day (already counted separately)
+            day_realized = realized_daily_map.get(report_date, 0.0)
+            delta = 0.0 if previous_mv is None else current_mv - previous_mv - day_realized
+            previous_mv = current_mv
+            if start_date and report_date < start_date:
+                continue
+            unrealized_daily_map[report_date] = delta
+    else:
+        previous_unrealized: float | None = None
+        for report_date in sorted(unrealized_total_by_date):
+            current_unrealized = unrealized_total_by_date[report_date]
+            delta = 0.0 if previous_unrealized is None else current_unrealized - previous_unrealized
+            previous_unrealized = current_unrealized
+            if start_date and report_date < start_date:
+                continue
+            unrealized_daily_map[report_date] = delta
 
     daily_dates = sorted(set(realized_daily_map) | set(unrealized_daily_map))
     daily = [
